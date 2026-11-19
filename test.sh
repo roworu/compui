@@ -3,8 +3,10 @@
 set -e
 cd "$(dirname "$0")"
 ./build.sh
-pgrep -x compui-host | xargs kill 2>/dev/null || true # a running host would be the old build
-export ZDOTDIR="$(mktemp -d)"
+# a running host would be the old build; the wrapper starts the new one
+pkill -f 'compui host' 2>/dev/null || true; pkill -x compui-host 2>/dev/null || true
+sleep 0.3
+export ZDOTDIR="$(mktemp -d)" COMPUI_DEBUG=1
 trap 'rm -rf "$ZDOTDIR"' EXIT
-echo "host log: tail -f /tmp/compui-host.log; type 'git ch' below"
+echo "host log: tail -f ${XDG_RUNTIME_DIR:-$HOME/.cache}/compui/host.log; type 'git ch' below"
 ./dist/compui

@@ -118,7 +118,7 @@ func onCandidates(_ record: String) {
 func startCompcore() {
     let dir = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0]).deletingLastPathComponent()
     compcore = Process()
-    compcore.executableURL = dir.appendingPathComponent("compcore")
+    compcore.executableURL = dir.appendingPathComponent("compui") // compcore is linked into it
     compcore.arguments = ["serve"]
     let inp = Pipe(), outp = Pipe()
     compcore.standardInput = inp

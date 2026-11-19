@@ -1,7 +1,11 @@
-//! host: listens on /tmp/compui-<uid>.sock for compui-pty messages, asks `compcore serve` for candidates,
-//! finds the cursor of the active terminal through a per-terminal handler and shows a popup under the
-//! typed word. linux only for now; macos runs the swift host in `macos/`
+//! `compui`: runs the shell wrapper (`pty.rs`) and starts the host if none answers. `compui host`
+//! is the host: listens on /tmp/compui-<uid>.sock for wrapper messages, asks compcore (linked) for
+//! candidates, finds the cursor of the active terminal through a per-terminal handler and shows a popup
+//! under the typed word. the rust host is linux only; macos runs the swift host in `macos/`, which
+//! gets candidates from `compui serve`
 #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused))]
+
+mod pty;
 
 #[cfg(target_os = "linux")]
 #[path = "../../../linux/common/main.rs"]
@@ -17,7 +21,7 @@ use compui_proto::Msg;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::io::PipeWriter;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
@@ -26,7 +30,7 @@ use std::{env, fs, thread};
 /// `debug` from the config, or COMPUI_DEBUG set
 static DEBUG: AtomicBool = AtomicBool::new(false);
 
-/// prints to stderr (the journal under systemd) when debug is on
+/// prints to stderr (the log file, see `runtime_dir`) when debug is on
 pub fn log(m: &str) {
     if DEBUG.load(Ordering::Relaxed) || env::var_os("COMPUI_DEBUG").is_some() {
         eprintln!("{m}");
@@ -63,6 +67,22 @@ impl Config {
         let home = PathBuf::from(env::var_os("HOME").unwrap_or_default());
         env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("compui/config")
     }
+}
+
+/// per-user dir for the zsh files, the host's log and lock: $XDG_RUNTIME_DIR/compui, else ~/.cache/compui
+pub fn runtime_dir() -> PathBuf {
+    let home = PathBuf::from(env::var_os("HOME").unwrap_or_default());
+    env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| home.join(".cache")).join("compui")
+}
+
+/// compcore's specs, with probed help cached in `$XDG_CACHE_HOME/compcore` like its own binary does
+fn specs() -> compcore::Specs {
+    let cache = env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|d| d.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .map(|d| d.join("compcore"));
+    compcore::Specs::load(None, cache)
 }
 
 /// a rect in logical pixels, global compositor coordinates, top-left origin
@@ -121,6 +141,8 @@ pub enum Ev {
     Cands(String),
     /// the active window changed, moved or resized
     Window(App),
+    /// some time after the last wrapper left
+    Idle,
     Quit,
 }
 
@@ -154,8 +176,8 @@ pub struct Host<P: Popup> {
     /// mtime of the config file when it was read, to reread it when it changes
     config_mtime: Option<SystemTime>,
     clients: HashMap<u64, UnixStream>,
-    compcore: ChildStdin,
-    _child: Child,
+    compcore: PipeWriter,
+    tx: async_channel::Sender<Ev>,
     app: App,
     cands: Vec<Cand>,
     selected: usize,
@@ -213,16 +235,12 @@ fn parse_reply(rec: &str) -> Option<(u64, usize, usize, Vec<Cand>)> {
 }
 
 impl<P: Popup> Host<P> {
-    /// starts `compcore serve` from the exe's directory; its replies go to `tx`
+    /// runs compcore's serve loop on a thread over pipes; its replies go to `tx`
     pub fn new(popup: P, handlers: Vec<Box<dyn Handler>>, tx: async_channel::Sender<Ev>) -> Self {
-        let dir = env::current_exe().unwrap().parent().unwrap().to_path_buf();
-        let mut child = Command::new(dir.join("compcore"))
-            .arg("serve")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("cannot start compcore");
-        let mut out = child.stdout.take().unwrap();
+        let (req_r, req_w) = std::io::pipe().expect("pipe");
+        let (mut out, rep_w) = std::io::pipe().expect("pipe");
+        thread::spawn(move || compcore::serve::run(BufReader::new(req_r), rep_w, &specs(), true));
+        let tx2 = tx.clone();
         thread::spawn(move || {
             let (mut pending, mut buf) = (Vec::new(), [0u8; 8192]);
             while let Ok(n) = out.read(&mut buf) {
@@ -243,8 +261,8 @@ impl<P: Popup> Host<P> {
             config: Config::parse(""),
             config_mtime: None,
             clients: HashMap::new(),
-            compcore: child.stdin.take().unwrap(),
-            _child: child,
+            compcore: req_w,
+            tx: tx2,
             app: App::default(),
             cands: Vec::new(),
             selected: 0,
@@ -390,7 +408,17 @@ impl<P: Popup> Host<P> {
             Ev::Gone(id) => {
                 self.hide_if(id);
                 self.clients.remove(&id);
+                if self.clients.is_empty() {
+                    let tx = self.tx.clone();
+                    thread::spawn(move || {
+                        thread::sleep(std::time::Duration::from_secs(30));
+                        let _ = tx.send_blocking(Ev::Idle);
+                    });
+                }
             }
+            // no wrapper left: the next one starts a host again
+            Ev::Idle if self.clients.is_empty() => return false,
+            Ev::Idle => {}
             Ev::Cands(rec) => self.on_cands(&rec),
             Ev::Window(app) => {
                 // focus change, move or resize: the popup would sit in the wrong place
@@ -430,15 +458,35 @@ pub fn serve(tx: async_channel::Sender<Ev>) {
     });
 }
 
+/// `compcore serve` on stdin/stdout, for the swift host
+fn serve_stdio() {
+    let _ = compcore::serve::run(BufReader::new(std::io::stdin()), std::io::stdout().lock(), &specs(), true);
+}
+
 #[cfg(target_os = "linux")]
-fn main() {
+fn host() {
+    // one host per user: one started by a racing wrapper leaves
+    let dir = runtime_dir();
+    let _ = fs::create_dir_all(&dir);
+    let lock = fs::File::create(dir.join("host.lock")).expect("host lock");
+    if lock.try_lock().is_err() {
+        return;
+    }
     common::run(vec![Box::new(ghostty::Ghostty::default()), Box::new(konsole::Konsole::default())]);
 }
 
 #[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!("compui-host (rust) runs on linux only; on macos build the swift host");
+fn host() {
+    eprintln!("the rust host runs on linux only; on macos build the swift host");
     std::process::exit(1);
+}
+
+fn main() {
+    match env::args().nth(1).as_deref() {
+        Some("host") => host(),
+        Some("serve") => serve_stdio(),
+        _ => pty::run(),
+    }
 }
 
 #[cfg(test)]

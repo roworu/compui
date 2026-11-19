@@ -256,19 +256,22 @@ done:
 
 - `compui-proto`: `hello`, `line` (buffer, cursor, cwd, path, cell, grid), `key`, `shown`, `hidden`,
   `accept`, `end`; round-trip test
-- `compui-pty`: pty pass-through with exit code, size polling, `vt100` cursor cell (seeded with a cursor position query at start), adapter socket
+- wrapper (`crates/compui/src/pty.rs`): pty pass-through with exit code, size polling, `vt100` cursor cell (seeded with a cursor position query at start), adapter socket
   per session, line sent once the screen settles, popup keys (up, down, tab, esc) taken while shown,
   accept forwarded to zsh, `end` on alt screen
 - `shell/zsh`: kuterm's completion adapter ported, injected through `ZDOTDIR`
-- host: socket server, `compcore serve` (v0.1.3, built from the pinned tag into `dist/`), popup
+- host: socket server, compcore v0.1.3 (linked into `compui`, the swift host runs `compui serve`), popup
   `NSPanel` with kind colors and selection, tray item with quit, hide on app switch, window move, resize and focus change (`AXObserver`), history
   navigation, empty line, alt screen and a window that is not the session's terminal (parents of the
   pty pid vs the frontmost app); no popup again until the next word after accept or esc
 - placement: exact `AXBoundsForRange` where a terminal gives it, else cell size from the pty's pixel
   size and the ax text area's origin (ghostty: surface frame plus its padding of 2)
-- launcher `dist/compui` starts the host, and replaces one whose socket is dead
-- linux (kde plasma wayland), rust host in `crates/compui-host` with a `Handler` trait: same socket and
-  view logic as the swift host, `compcore serve` as a child; `linux/common` loads a kwin script that reports
+- one binary `compui` (`crates/compui`): the wrapper by default, `compui host` the linux host, `compui serve`
+  compcore's serve loop for the swift host. the wrapper starts the host (setsid, single instance by a lock)
+  when the socket doesn't answer; the host exits 30s after the last wrapper left. zsh files are embedded and
+  written to `$XDG_RUNTIME_DIR/compui/zsh`
+- linux (kde plasma wayland), rust host in `crates/compui` with a `Handler` trait: same socket and
+  view logic as the swift host, compcore linked; `linux/common` loads a kwin script that reports
   the active window (pid, client rect, output, scale) over d-bus, draws the popup as a gtk4 layer-shell
   overlay with no keyboard or mouse input; no tray, it runs as a background service. `linux/ghostty`:
   cell size from `xpx/ypx` (floored per cell), grid left from the client rect plus `window-padding-x`, grid
@@ -276,11 +279,8 @@ done:
   the window is a split, no popup. `linux/konsole`: the same from the bottom, konsole's pixel size is its
   text area in logical px; insets from the default profile (`TerminalMargin`, `HighlightScrolledLines`,
   `ScrollBarPosition`)
-- linux install: `./install.sh` builds and copies `dist/` to `~/.local/lib/compui`, links `compui-pty` into
-  `~/.local/bin`, runs the host as the systemd user service `compui.service` (with the graphical
-  session), removes older installs (xdg autostart, tray icon, stale sockets); `--uninstall` undoes it.
-  this replaces the tray on linux: one config file `~/.config/compui/config` (`enabled`, `debug`),
-  reread when it changes; status and logs through `systemctl --user status compui` and the journal
+- linux install: `cargo install --path crates/compui`, no service. one config file `~/.config/compui/config`
+  (`enabled`, `debug`), reread when it changes, replaces the tray on linux; log in `$XDG_RUNTIME_DIR/compui/host.log`
 - popup drawn like kuterm's on both oses (`macos/common/popup.swift`, `linux/common/popup.rs`): kuterm's
   one dark / one light colors by the system appearance, rounded box with border and shadow, rows one
   terminal line high, font sized to the cell width, label column in the kind's color, smaller muted

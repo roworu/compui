@@ -1,11 +1,15 @@
 //! runs the user's shell in a pty, passes every byte through, reports the line and cursor cell to
-//! compui-host and takes the popup keys while the host shows it
+//! the host and takes the popup keys while the host shows it
+use crate::runtime_dir;
 use compui_proto::{Cell, Grid, Msg};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::num::NonZeroU16 as NZ;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fs, process, thread};
@@ -80,10 +84,57 @@ fn popup_key(read: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn main() {
+/// the zsh adapter, built in; written out for zsh to source
+const ZSH: [(&str, &str); 2] = [(".zshenv", include_str!("../../../shell/zsh/.zshenv")), ("compui.zsh", include_str!("../../../shell/zsh/compui.zsh"))];
+
+/// writes the zsh files to `dir` when they differ, through a rename so a starting zsh never reads half a file
+fn write_zsh(dir: &Path) {
+    let _ = fs::create_dir_all(dir);
+    for (name, text) in ZSH {
+        let path = dir.join(name);
+        if fs::read(&path).ok().as_deref() != Some(text.as_bytes()) {
+            let tmp = dir.join(format!("{name}.{}", process::id()));
+            if fs::write(&tmp, text).is_ok() {
+                let _ = fs::rename(&tmp, &path);
+            }
+        }
+    }
+}
+
+/// connects to the host, starting one in the background (its own session, so it outlives this
+/// terminal) when none answers. the host exits on its own once no wrapper is left
+fn connect_host(sock: &str, dir: &Path) -> Option<UnixStream> {
+    if let Ok(s) = UnixStream::connect(sock) {
+        return Some(s);
+    }
+    let exe = env::current_exe().ok()?;
+    // the swift host on macos sits next to this binary
+    let mut cmd = Command::new(&exe);
+    cmd.arg("host");
+    if cfg!(target_os = "macos") {
+        cmd = Command::new(exe.with_file_name("compui-host"));
+    }
+    let log = fs::File::create(dir.join("host.log")).ok()?;
+    cmd.current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
+    unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }) };
+    cmd.spawn().ok()?;
+    let end = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < end {
+        thread::sleep(Duration::from_millis(50));
+        if let Ok(s) = UnixStream::connect(sock) {
+            return Some(s);
+        }
+    }
+    None
+}
+
+/// the wrapper: `compui` with no arguments
+pub fn run() {
     let size = term_size();
     let pair = native_pty_system().openpty(size).expect("openpty");
-    let exe_dir = env::current_exe().unwrap().parent().unwrap().to_path_buf();
+    let dir = runtime_dir();
+    let shell_dir = dir.join("zsh");
+    write_zsh(&shell_dir);
     let session = process::id();
     let zsh_sock = format!("/tmp/compui-{session}.zsh.sock");
     let _ = fs::remove_file(&zsh_sock);
@@ -94,7 +145,6 @@ fn main() {
     let mut cmd = CommandBuilder::new(shell);
     cmd.arg("-l");
     cmd.env("COMPUI_SOCKET", &zsh_sock);
-    let shell_dir = exe_dir.join("shell/zsh");
     cmd.env("COMPUI_SHELL_DIR", &shell_dir);
     cmd.env("ZDOTDIR", &shell_dir);
     if let Ok(z) = env::var("ZDOTDIR") {
@@ -103,7 +153,7 @@ fn main() {
     let mut child = pair.slave.spawn_command(cmd).expect("spawn shell");
     drop(pair.slave);
 
-    let host = UnixStream::connect(format!("/tmp/compui-{}.sock", unsafe { libc::getuid() })).ok();
+    let host = connect_host(&format!("/tmp/compui-{}.sock", unsafe { libc::getuid() }), &dir);
     let st = Arc::new(Mutex::new(State {
         parser: vt100::Parser::new(NZ::new(size.rows).unwrap(), NZ::new(size.cols).unwrap(), 0),
         host: host.as_ref().and_then(|h| h.try_clone().ok()),

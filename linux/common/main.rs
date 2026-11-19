@@ -1,4 +1,4 @@
-//! linux side of compui-host, a background service (systemd user unit, see install.sh): a layer-shell
+//! linux side of the host (`compui host`, started by the first wrapper): a layer-shell
 //! popup (gtk4, `popup.rs`) and a kwin script that reports the active window over d-bus. kde plasma
 //! (wayland) only for now
 #[path = "popup.rs"]
@@ -86,7 +86,7 @@ pub fn run(handlers: Vec<Box<dyn Handler>>) {
     }
     gtk::init().expect("gtk needs a wayland display");
     let (tx, rx) = async_channel::unbounded();
-    // without these the popup can't show; said always, so `systemctl --user status compui` tells why
+    // without these the popup can't show; said always, so the host log tells why
     if !gtk4_layer_shell::is_supported() {
         eprintln!("compositor without layer-shell, no popup");
     }
