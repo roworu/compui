@@ -1,0 +1,33 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+compUI: a fig-style completion popup for macOS terminals it doesn't own (ghostty first). Candidates come from [compcore](https://github.com/roworu/compcore) (pinned tag v0.1.3); compUI finds the cursor on screen, shows a native popup and puts the picked candidate into the shell line. `PLAN.md` is the design doc (target layout, protocols, phases) and its `status` section says what the current poc actually does versus the plan. Read it before structural changes.
+
+## Commands
+
+- `./build.sh` — builds `dist/` (`compui-pty`, `compcore` from the pinned tag via `cargo install`, `compui-host` via `swiftc`, the `compui` launcher, `shell/zsh`). Needs cargo and swiftc.
+- `./test.sh` — builds, then starts the wrapper in a pure zsh (temp empty `ZDOTDIR`) with host debug logging. Interactive and manual: type `git ch`. Host log: `/tmp/compui-host.log`.
+- `cargo test` — only `compui-proto` has tests (message round-trip). Single test: `cargo test -p compui-proto <name>`.
+- The popup needs the macOS accessibility permission and a real terminal; there are no automated UI tests.
+
+## Architecture
+
+Three processes talk over unix sockets:
+
+```
+terminal ⇄ compui-pty ⇄ zsh (shell/zsh/compui.zsh)
+              └── /tmp/compui-<uid>.sock ──► compui-host (Swift, macos/poc/main.swift)
+                                               └─ spawns `compcore serve`, draws NSPanel popup
+```
+
+- `crates/compui-pty`: runs the shell in a pty and passes all bytes through untouched. Parses output with `vt100` to track the cursor cell and alt screen, owns a per-session socket for the zsh adapter, and takes up/down/tab/esc itself only while the host reports the popup `shown`. The wrapper is in every byte's path, so keep it thin (no engine, no UI).
+- `shell/zsh/compui.zsh`: port of kuterm's completion adapter (protocol v1). Injected via `ZDOTDIR`, reports each edit, applies `accept` lines with zle (dropped if `seq` is stale).
+- `crates/compui-proto`: serde messages pty ⇄ host as JSON lines (`hello`, `line`, `key`, `shown`, `hidden`, `accept`, `end`), `"v":1`. The Swift host reimplements this by hand, so change both sides together.
+- `macos/poc/main.swift`: single-file host. Finds the terminal app by walking parents of the pty pid, locates the text via accessibility (`AXBoundsForRange`, else cell size from the pty pixel size plus the AX text area origin; ghostty padding is a fixed 2), and shows a non-activating `NSPanel`.
+
+## Known divergences from PLAN.md
+
+The host is Swift rather than the planned Rust `compui-host`, and the pty uses `vt100` rather than `alacritty_terminal`. Handler/tray traits and the `macos/<terminal>/` layout in the plan don't exist yet. Cargo workspace edition is 2024.
