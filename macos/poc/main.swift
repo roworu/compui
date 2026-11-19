@@ -187,6 +187,7 @@ func show(_ cursor: CGRect) {
 func onCandidates(_ record: String) {
     let head = record.split(separator: "\u{1e}", omittingEmptySubsequences: false)
     let f = head[0].split(separator: "\u{1f}", omittingEmptySubsequences: false)
+    log("candidates \(record.split(separator: "\u{1e}").count - 1)")
     guard f.count == 3, let id = Int(f[0]), id == latestId, let c = requests[id], let s = Int(f[1]), let e = Int(f[2]) else { return }
     requests = [:]
     cands = head.dropFirst().map {
@@ -198,7 +199,7 @@ func onCandidates(_ record: String) {
     let col = max((c.cell["col"] ?? 0) - (c.cursor - s), 0)
     guard let app = NSWorkspace.shared.frontmostApplication,
           let win = attr(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedWindowAttribute),
-          let rect = locate(win as! AXUIElement, [c.cell["row"] ?? 0, col, c.grid["rows"] ?? 1, c.grid["cols"] ?? 1, c.grid["xpx"] ?? 0, c.grid["ypx"] ?? 0]) else { hide(); return }
+          let rect = locate(win as! AXUIElement, [c.cell["row"] ?? 0, col, c.grid["rows"] ?? 1, c.grid["cols"] ?? 1, c.grid["xpx"] ?? 0, c.grid["ypx"] ?? 0]) else { log("no cursor rect: frontmost app, focused window or locate failed"); hide(); return }
     ctx = c; wordStart = s; wordEnd = e; selected = 0
     show(rect)
     if shownFd == nil { shownFd = c.fd; reply(c.fd, ["type": "shown", "session": c.session]) }
@@ -236,6 +237,7 @@ func handle(_ line: Data, _ fd: Int32) {
         guard let buffer = m["buffer"] as? String, let cursor = m["cursor"] as? Int, let cwd = m["cwd"] as? String,
               let path = m["path"] as? String, let cell = m["cell"] as? [String: Int], let grid = m["grid"] as? [String: Int] else { return }
         let active = NSWorkspace.shared.frontmostApplication.map { ancestors(Int32(session)).contains($0.processIdentifier) } ?? false
+        log("line \(buffer.debugDescription) cell \(cell) grid \(grid) active \(active) enabled \(enabled)")
         if m["history"] as? Bool == true || !active || !enabled || buffer.trimmingCharacters(in: .whitespaces).isEmpty { latestId += 1; if shownFd == fd { hide() }; return }
         latestId += 1
         requests[latestId] = Ctx(fd: fd, session: session, seq: m["seq"] as? Int ?? 0, cell: cell, grid: grid, cursor: cursor)
