@@ -4,9 +4,7 @@
 import Cocoa
 import ApplicationServices
 
-guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary) else {
-    print("grant accessibility to this binary's terminal, then rerun"); exit(1)
-}
+_ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
 
 let nsApp = NSApplication.shared
 nsApp.setActivationPolicy(.accessory)
@@ -17,10 +15,14 @@ tray.button?.title = "compUI"
 let menu = NSMenu()
 var enabled = true
 final class Toggle: NSObject {
-    @objc func flip(_ item: NSMenuItem) { enabled.toggle(); item.state = enabled ? .on : .off; statusItem.title = enabled ? "running" : "popup off"; if !enabled { hide() } }
+    @objc func flip(_ item: NSMenuItem) { enabled.toggle(); item.state = enabled ? .on : .off; refreshStatus(); if !enabled { hide() } }
 }
 let toggle = Toggle()
 let statusItem = NSMenuItem(title: "running", action: nil, keyEquivalent: "")
+func refreshStatus() { statusItem.title = !AXIsProcessTrusted() ? "accessibility permission missing" : enabled ? "running" : "popup off" }
+refreshStatus()
+// the permission can be granted while the host runs
+Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in refreshStatus() }
 menu.addItem(statusItem)
 let toggleItem = NSMenuItem(title: "Popup enabled", action: #selector(Toggle.flip(_:)), keyEquivalent: "")
 toggleItem.target = toggle
@@ -29,7 +31,7 @@ menu.addItem(toggleItem)
 menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 tray.menu = menu
 
-let handlers: [Handler] = [Ghostty(), Terminal(), Generic()]
+let handlers: [Handler] = [Ghostty(), Terminal(), ITerm2(), Generic()]
 
 struct Cand { let label: String, insert: String, desc: String, kind: String }
 struct Ctx { let fd: Int32, session: Int, seq: Int, cell: [String: Int], grid: [String: Int], cursor: Int }
@@ -116,6 +118,7 @@ func onCandidates(_ record: String) {
           let handler = handlers.first(where: { $0.matches(app.bundleIdentifier ?? "") }),
           let rect = handler.locate(win as! AXUIElement, GridPos(row: c.cell["row"] ?? 0, col: col, rows: c.grid["rows"] ?? 1, cols: c.grid["cols"] ?? 1, xpx: c.grid["xpx"] ?? 0, ypx: c.grid["ypx"] ?? 0)) else { log("no cursor rect: frontmost app, focused window or locate failed"); hide(); return }
     ctx = c; wordStart = s; wordEnd = e; selected = 0
+    watch(app.processIdentifier, win as! AXUIElement)
     show(rect)
     if shownFd == nil { shownFd = c.fd; reply(c.fd, ["type": "shown", "session": c.session]) }
 }
@@ -153,7 +156,7 @@ func handle(_ line: Data, _ fd: Int32) {
               let path = m["path"] as? String, let cell = m["cell"] as? [String: Int], let grid = m["grid"] as? [String: Int] else { return }
         let active = NSWorkspace.shared.frontmostApplication.map { ancestors(Int32(session)).contains($0.processIdentifier) } ?? false
         log("line \(buffer.debugDescription) cell \(cell) grid \(grid) active \(active) enabled \(enabled)")
-        if m["history"] as? Bool == true || !active || !enabled || buffer.trimmingCharacters(in: .whitespaces).isEmpty { latestId += 1; if shownFd == fd { hide() }; return }
+        if m["history"] as? Bool == true || !active || !enabled || !AXIsProcessTrusted() || buffer.trimmingCharacters(in: .whitespaces).isEmpty { latestId += 1; if shownFd == fd { hide() }; return }
         latestId += 1
         requests[latestId] = Ctx(fd: fd, session: session, seq: m["seq"] as? Int ?? 0, cell: cell, grid: grid, cursor: cursor)
         toCompcore.write(Data("\(latestId)\u{1f}\(cursor)\u{1f}\(cwd)\u{1f}\(path)\u{1f}\(buffer)\0".utf8))
@@ -170,6 +173,20 @@ func handle(_ line: Data, _ fd: Int32) {
         }
     default: break
     }
+}
+
+// hide when the window the popup sits over moves or resizes, or the app's focused window changes
+var watched: (pid: pid_t, win: AXUIElement)?
+var axObserver: AXObserver?
+func watch(_ pid: pid_t, _ win: AXUIElement) {
+    if let w = watched, w.pid == pid, CFEqual(w.win, win) { return }
+    if let o = axObserver { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode) }
+    var o: AXObserver?
+    guard AXObserverCreate(pid, { _, _, _, _ in DispatchQueue.main.async { hide() } }, &o) == .success, let o = o else { watched = nil; return }
+    for n in [kAXMovedNotification, kAXResizedNotification] { AXObserverAddNotification(o, win, n as CFString, nil) }
+    AXObserverAddNotification(o, AXUIElementCreateApplication(pid), kAXFocusedWindowChangedNotification as CFString, nil)
+    CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode)
+    axObserver = o; watched = (pid, win)
 }
 
 NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in

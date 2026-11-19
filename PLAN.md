@@ -261,7 +261,7 @@ done:
   accept forwarded to zsh, `end` on alt screen
 - `shell/zsh`: kuterm's completion adapter ported, injected through `ZDOTDIR`
 - host: socket server, `compcore serve` (v0.1.3, built from the pinned tag into `dist/`), popup
-  `NSPanel` with kind colors and selection, tray item with quit, hide on app switch, history
+  `NSPanel` with kind colors and selection, tray item with quit, hide on app switch, window move, resize and focus change (`AXObserver`), history
   navigation, empty line, alt screen and a window that is not the session's terminal (parents of the
   pty pid vs the frontmost app); no popup again until the next word after accept or esc
 - placement: exact `AXBoundsForRange` where a terminal gives it, else cell size from the pty's pixel
@@ -272,13 +272,12 @@ left:
 
 - phase 2: move the host to rust (`compui-host`, compcore linked, handler trait, `Tray` trait), or
   decide to keep swift for macos; `compui-pty` on `alacritty_terminal`
-- phase 3, 4: `macos/terminal`, `macos/iterm2` handlers; only the generic ax path exists
+- phase 4: `macos/iterm2` is written from the plan (focused element, exact path only) and untested, no iterm2 on the dev machine
 - phase 5: split check (`cols × rows`)
-- phase 6: `generic` handler, hide on window move, resize and focus change (`AXObserver`), multiple
-  screens, spaces, full screen
+- phase 6: multiple screens, spaces, full screen
 - keys: wait up to 400 ms for candidates still being found; word start for wide chars and wrapped lines
 - popup: pick by mouse is off; kind colors are fixed, not from the terminal palette
-- permission flow and menu status text for accessibility missing (running / popup off exist); the tray has an enable / disable item
+- permission flow: the prompt shows on start, and the tray status line says when it is missing; no guided setup yet
 - phase 7: `.app`, universal, sign, notarize, launch agent
 - phase 8: linux and windows handlers and trays
 - tests: pty byte-for-byte comparison against no wrapper, placement math, ax fixtures (key filter has a unit test)

@@ -9,7 +9,7 @@ cp target/release/compui-pty dist/
 [ -x target/compcore/bin/compcore ] || cargo install --git https://github.com/roworu/compcore --tag v0.1.3 compcore --root target/compcore -q
 cp target/compcore/bin/compcore dist/
 mkdir -p dist/shell && cp -R shell/zsh dist/shell/
-swiftc -O macos/common/*.swift macos/ghostty/*.swift macos/terminal/*.swift macos/generic/*.swift -o dist/compui-host 2>/dev/null
+swiftc -O macos/common/*.swift macos/ghostty/*.swift macos/terminal/*.swift macos/iterm2/*.swift macos/generic/*.swift -o dist/compui-host 2>/dev/null
 cat > dist/compui <<'L'
 #!/bin/sh
 d="$(cd "$(dirname "$0")" && pwd)"
