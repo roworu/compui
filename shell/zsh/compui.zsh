@@ -8,7 +8,7 @@ if [[ -o interactive ]]; then
   if [[ -n "$COMPUI_SOCKET" ]] && zmodload zsh/net/socket 2>/dev/null \
     && autoload -Uz add-zle-hook-widget 2>/dev/null; then
     typeset -gi __compui_cfd=-1 __compui_cseq=0
-    typeset -g __compui_csent= __compui_cpath=
+    typeset -g __compui_csent= __compui_cpath= __compui_cpwd= __compui_cpwdjson=
 
     # each function starts with "emulate -L zsh": user options like ksh_arrays or
     # sh_word_split must not change how they run
@@ -18,6 +18,11 @@ if [[ -o interactive ]]; then
     __compui_cjson() {
       emulate -L zsh
       local s=$1
+      # most lines need no escaping, one match is cheaper than the five passes
+      if [[ $s != *[\\\"[:cntrl:]]* ]]; then
+        REPLY="\"$s\""
+        return
+      fi
       s=${s//\\/\\\\}
       s=${s//\"/\\\"}
       s=${s//$'\n'/\\n}
@@ -107,8 +112,12 @@ if [[ -o interactive ]]; then
       [[ $LASTWIDGET == *history* || $LASTWIDGET == *-line-or-search ]] && hist=,"history":true
       __compui_cjson "$BUFFER"
       buffer=$REPLY
-      __compui_cjson "$PWD"
-      __compui_csend "{\"v\":1,\"type\":\"line\",\"seq\":$__compui_cseq,\"cursor\":$CURSOR,\"buffer\":$buffer,\"cwd\":$REPLY$hist}"
+      if [[ $PWD != "$__compui_cpwd" ]]; then
+        __compui_cpwd=$PWD
+        __compui_cjson "$PWD"
+        __compui_cpwdjson=$REPLY
+      fi
+      __compui_csend "{\"v\":1,\"type\":\"line\",\"seq\":$__compui_cseq,\"cursor\":$CURSOR,\"buffer\":$buffer,\"cwd\":$__compui_cpwdjson$hist}"
     }
 
     __compui_cfinish() {
@@ -121,7 +130,13 @@ if [[ -o interactive ]]; then
     __compui_chooks() {
       add-zsh-hook -d precmd __compui_chooks
       add-zle-hook-widget line-init __compui_creport
-      add-zle-hook-widget line-pre-redraw __compui_creport
+      # runs on every key: a plain widget skips add-zle-hook-widget's dispatcher (~0.1ms a key).
+      # one added later still runs it, add-zle-hook-widget keeps a widget it finds there
+      if (( $+widgets[zle-line-pre-redraw] )); then
+        add-zle-hook-widget line-pre-redraw __compui_creport
+      else
+        zle -N zle-line-pre-redraw __compui_creport
+      fi
       add-zle-hook-widget line-finish __compui_cfinish
     }
     add-zsh-hook precmd __compui_chooks

@@ -230,6 +230,28 @@ fn command(prog: &str, args: &[&str], dir: &Path, zsh: &str) -> CommandBuilder {
     cmd
 }
 
+/// zsh with compui's adapter, reporting to a socket that drops what it gets: the adapter's cost
+/// without the wrapper's
+fn with_adapter(mut cmd: CommandBuilder, dir: &Path) -> CommandBuilder {
+    let shell = dir.join("adapter");
+    if !shell.exists() {
+        fs::create_dir_all(&shell).unwrap();
+        fs::write(shell.join(".zshenv"), include_str!("../../../shell/zsh/.zshenv")).unwrap();
+        fs::write(shell.join("compui.zsh"), include_str!("../../../shell/zsh/compui.zsh")).unwrap();
+        let srv = UnixListener::bind(dir.join("adapter.sock")).unwrap();
+        thread::spawn(move || {
+            for s in srv.incoming().map_while(Result::ok) {
+                thread::spawn(move || std::io::copy(&mut &s, &mut std::io::sink()));
+            }
+        });
+    }
+    cmd.env("COMPUI_ZDOTDIR", dir.join("zdot"));
+    cmd.env("ZDOTDIR", &shell);
+    cmd.env("COMPUI_SHELL_DIR", &shell);
+    cmd.env("COMPUI_SOCKET", dir.join("adapter.sock"));
+    cmd
+}
+
 /// echo latency per keystroke, and with a host also the keystroke to `line` latency and how many
 /// lines came with a stale cursor cell (sent before their redraw, the popup would sit wrong)
 fn typing(t: &mut Term, host: Option<&Host>) -> (Vec<f64>, Vec<f64>, f64) {
@@ -324,6 +346,14 @@ fn main() {
         t.close();
     }
     r.add("startup_zsh_ms", pct(&v, 50));
+    let mut v = Vec::new();
+    for _ in 0..RUNS {
+        let t0 = Instant::now();
+        let mut t = Term::spawn(with_adapter(cmd(&zsh, &["-l"]), &dir));
+        v.push(ms(t.wait_for(PROMPT) - t0));
+        t.close();
+    }
+    r.add("startup_adapter_ms", pct(&v, 50));
     let (mut prompt, mut ready) = (Vec::new(), Vec::new());
     for _ in 0..RUNS {
         host.drain();
@@ -343,6 +373,14 @@ fn main() {
     r.add("echo_zsh_p50_us", pct(&echo, 50));
     r.add("echo_zsh_p99_us", pct(&echo, 99));
     r.add("throughput_zsh_mbs", throughput(&mut t, &dir));
+    t.close();
+
+    eprintln!("zsh with the adapter");
+    let mut t = Term::spawn(with_adapter(cmd(&zsh, &["-l"]), &dir));
+    t.wait_for(PROMPT);
+    let (echo, _, _) = typing(&mut t, None);
+    r.add("echo_adapter_p50_us", pct(&echo, 50));
+    r.add("echo_adapter_p99_us", pct(&echo, 99));
     t.close();
 
     eprintln!("wrapper");
