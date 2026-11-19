@@ -1,0 +1,39 @@
+# on a v* tag: test, build compui for linux (x86_64, arm64) and macos (arm64, with the swift host),
+# and attach compui-<os>-<arch>.tar.gz to a github release, which install.sh downloads
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, name: linux-x86_64 }
+          - { runner: ubuntu-24.04-arm, name: linux-arm64 }
+          - { runner: macos-14, name: macos-arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgtk4-layer-shell-dev
+      - run: cargo test
+      - run: ./build.sh
+      - run: tar -C dist -czf compui-${{ matrix.name }}.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compui-${{ matrix.name }}
+          path: compui-${{ matrix.name }}.tar.gz
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" compui-*.tar.gz --repo "$GITHUB_REPOSITORY" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

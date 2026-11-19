@@ -279,7 +279,8 @@ done:
   the window is a split, no popup. `linux/konsole`: the same from the bottom, konsole's pixel size is its
   text area in logical px; insets from the default profile (`TerminalMargin`, `HighlightScrolledLines`,
   `ScrollBarPosition`)
-- linux install: `cargo install --path crates/compui`, no service. one config file `~/.config/compui/config`
+- install: `install.sh` downloads the release tarball for the os/arch into `~/.local/bin`, no service;
+  a `v*` tag builds the tarballs (`.github/workflows/release.yml`). one config file `~/.config/compui/config`
   (`enabled`, `debug`), reread when it changes, replaces the tray on linux; log in `$XDG_RUNTIME_DIR/compui/host.log`
 - popup drawn like kuterm's on both oses (`macos/common/popup.swift`, `linux/common/popup.rs`): kuterm's
   one dark / one light colors by the system appearance, rounded box with border and shadow, rows one
