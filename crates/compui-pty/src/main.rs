@@ -89,7 +89,8 @@ fn main() {
     let _ = fs::remove_file(&zsh_sock);
     let listener = UnixListener::bind(&zsh_sock).expect("adapter socket");
 
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    // the only adapter is zsh's, so another login shell would never report a line
+    let shell = env::var("SHELL").ok().filter(|s| s.ends_with("/zsh")).unwrap_or_else(|| "zsh".into());
     let mut cmd = CommandBuilder::new(shell);
     cmd.arg("-l");
     cmd.env("COMPUI_SOCKET", &zsh_sock);
