@@ -23,6 +23,9 @@ struct State {
     /// the shell's newest line, sent to the host once the screen has settled so `cell` is current
     pending: Option<Value>,
     last_output: Instant,
+    /// when `pending` came, and whether output (its redraw) followed
+    line_at: Instant,
+    echoed: bool,
     shown: bool,
     seq: u64,
     path: String,
@@ -65,8 +68,10 @@ fn cursor_start() -> Option<(u16, u16)> {
     Some((r.parse().ok()?, c.parse().ok()?))
 }
 
-/// how long the screen must be quiet before a line goes out, so its cursor cell is current
-const SETTLE: Duration = Duration::from_millis(15);
+/// a line comes before its redraw; once that is out and the screen quiet this long, the cell is current
+const QUIET: Duration = Duration::from_millis(3);
+/// a line whose redraw never comes (nothing to draw) goes out after this
+const SETTLE: Duration = Duration::from_millis(50);
 
 /// best effort: the popup is optional, the terminal must work without the host. a full queue
 /// means a stuck host, whose message is dropped rather than blocking the terminal
@@ -207,6 +212,8 @@ pub fn run() {
         zsh: None,
         pending: None,
         last_output: Instant::now(),
+        line_at: Instant::now(),
+        echoed: false,
         shown: false,
         seq: 0,
         path: env::var("PATH").unwrap_or_default(),
@@ -246,8 +253,8 @@ pub fn run() {
                     Some("line") => {
                         st.seq = v["seq"].as_u64().unwrap_or(0);
                         st.pending = Some(v);
-                        // its redraw comes after it, so the quiet time counts from here too
-                        st.last_output = Instant::now();
+                        st.line_at = Instant::now();
+                        st.echoed = false;
                         ready.notify_one();
                     }
                     Some("end") => {
@@ -264,13 +271,17 @@ pub fn run() {
     // settled screen -> line message with the cursor cell
     {
         let st = st.clone();
+        let ready = ready.clone();
         thread::spawn(move || {
             let mut st = st.lock().unwrap();
             loop {
                 st = ready.wait_while(st, |s| s.pending.is_none()).unwrap();
-                let quiet = st.last_output.elapsed();
-                if quiet < SETTLE {
-                    st = ready.wait_timeout(st, SETTLE - quiet).unwrap().0;
+                let left = match st.echoed {
+                    true => QUIET.saturating_sub(st.last_output.elapsed()),
+                    false => SETTLE.saturating_sub(st.line_at.elapsed()),
+                };
+                if !left.is_zero() {
+                    st = ready.wait_timeout(st, left).unwrap().0;
                     continue;
                 }
                 let v = st.pending.take().unwrap();
@@ -357,6 +368,10 @@ pub fn run() {
         let mut st = st.lock().unwrap();
         st.parser.process(&buf[..n]);
         st.last_output = Instant::now();
+        if st.pending.is_some() {
+            st.echoed = true;
+            ready.notify_one();
+        }
         if st.shown && st.parser.screen().alternate_screen() {
             st.shown = false;
             send(&mut st, &Msg::End { v: 1, session });

@@ -17,6 +17,18 @@ const PROMPT: &[u8] = b"bench$ ";
 const RUNS: usize = 5;
 const SAMPLES: usize = 100;
 const BYTES: usize = 20_000_000;
+/// a bare prompt; with $BENCH_SLOW a line-pre-redraw hook after compui's that takes 10ms, like a
+/// syntax highlighter, so the redraw comes well after the line
+const ZSHRC: &str = r#"PROMPT='bench$ '
+unsetopt prompt_sp
+if [[ -n $BENCH_SLOW ]]; then
+  zmodload zsh/zselect
+  autoload -Uz add-zle-hook-widget
+  __bench_slow() { zselect -t 1 }
+  __bench_hook() { add-zsh-hook -d precmd __bench_hook; add-zle-hook-widget line-pre-redraw __bench_slow }
+  add-zsh-hook precmd __bench_hook
+fi
+"#;
 
 type Writer = Arc<Mutex<Box<dyn Write + Send>>>;
 
@@ -142,15 +154,15 @@ impl Host {
         Host { msgs, conns, conn }
     }
 
-    /// when the next message of `kind` arrived
-    fn recv(&self, kind: &str) -> Instant {
+    /// the next message of `kind` and when it arrived
+    fn recv(&self, kind: &str) -> (Instant, Value) {
         let end = Instant::now() + WAIT;
         loop {
             let Ok((t, v)) = self.msgs.recv_timeout(end.saturating_duration_since(Instant::now())) else {
                 panic!("no {kind} message from the wrapper");
             };
             if v["type"] == kind {
-                return t;
+                return (t, v);
             }
         }
     }
@@ -218,9 +230,10 @@ fn command(prog: &str, args: &[&str], dir: &Path, zsh: &str) -> CommandBuilder {
     cmd
 }
 
-/// echo latency per keystroke, and with a host also the keystroke to `line` latency
-fn typing(t: &mut Term, host: Option<&Host>) -> (Vec<f64>, Vec<f64>) {
-    let (mut echo, mut line) = (Vec::new(), Vec::new());
+/// echo latency per keystroke, and with a host also the keystroke to `line` latency and how many
+/// lines came with a stale cursor cell (sent before their redraw, the popup would sit wrong)
+fn typing(t: &mut Term, host: Option<&Host>) -> (Vec<f64>, Vec<f64>, f64) {
+    let (mut echo, mut line, mut stale) = (Vec::new(), Vec::new(), 0.0);
     for i in 0..SAMPLES {
         // ctrl-u now and then keeps the line short
         if i % 40 == 0 {
@@ -232,13 +245,17 @@ fn typing(t: &mut Term, host: Option<&Host>) -> (Vec<f64>, Vec<f64>) {
         let t0 = t.send(b"a");
         echo.push(us(t.next() - t0));
         if let Some(h) = host {
-            line.push(us(h.recv("line") - t0));
+            let (t1, v) = h.recv("line");
+            line.push(us(t1 - t0));
+            if v["cell"]["col"].as_u64() != v["cursor"].as_u64().map(|c| c + PROMPT.len() as u64) {
+                stale += 1.0;
+            }
         }
         thread::sleep(Duration::from_millis(30));
         t.drain();
         host.map(Host::drain);
     }
-    (echo, line)
+    (echo, line, stale)
 }
 
 /// MB/s of `cat`ing BYTES of text until its end marker
@@ -293,7 +310,7 @@ fn main() {
     let dir = env::temp_dir().join(format!("compui-bench-{}", std::process::id()));
     fs::create_dir_all(dir.join("zdot")).unwrap();
     fs::write(dir.join("out.txt"), format!("{}\n", "x".repeat(99)).repeat(BYTES / 100)).unwrap();
-    fs::write(dir.join("zdot/.zshrc"), "PROMPT='bench$ '\nunsetopt prompt_sp\n").unwrap();
+    fs::write(dir.join("zdot/.zshrc"), ZSHRC).unwrap();
     let host = Host::start(&dir.join("host.sock"));
     let cmd = |prog: &str, args: &[&str]| command(prog, args, &dir, &zsh);
     let mut r = Results(Vec::new());
@@ -313,7 +330,7 @@ fn main() {
         let t0 = Instant::now();
         let mut t = Term::spawn(cmd(exe, &[]));
         prompt.push(ms(t.wait_for(PROMPT) - t0));
-        ready.push(ms(host.recv("line") - t0));
+        ready.push(ms(host.recv("line").0 - t0));
         t.close();
     }
     r.add("startup_prompt_ms", pct(&prompt, 50));
@@ -322,7 +339,7 @@ fn main() {
     eprintln!("plain zsh");
     let mut t = Term::spawn(cmd(&zsh, &["-l"]));
     t.wait_for(PROMPT);
-    let (echo, _) = typing(&mut t, None);
+    let (echo, _, _) = typing(&mut t, None);
     r.add("echo_zsh_p50_us", pct(&echo, 50));
     r.add("echo_zsh_p99_us", pct(&echo, 99));
     r.add("throughput_zsh_mbs", throughput(&mut t, &dir));
@@ -344,11 +361,12 @@ fn main() {
     r.add("idle_wakeups_per_s", idle.map(|i| i.0));
     r.add("idle_cpu_us_per_s", idle.map(|i| i.1));
 
-    let (echo, line) = typing(&mut t, Some(&host));
+    let (echo, line, stale) = typing(&mut t, Some(&host));
     r.add("echo_p50_us", pct(&echo, 50));
     r.add("echo_p99_us", pct(&echo, 99));
     r.add("line_p50_us", pct(&line, 50));
     r.add("line_p99_us", pct(&line, 99));
+    r.add("line_stale", stale);
 
     host.say(json!({"type": "shown", "v": 1, "session": 0}));
     thread::sleep(Duration::from_millis(50));
@@ -356,7 +374,7 @@ fn main() {
     let mut key = Vec::new();
     for _ in 0..SAMPLES {
         let t0 = t.send(b"\x1b[B");
-        key.push(us(host.recv("key") - t0));
+        key.push(us(host.recv("key").0 - t0));
     }
     host.say(json!({"type": "hidden", "v": 1, "session": 0}));
     thread::sleep(Duration::from_millis(50));
@@ -369,6 +387,18 @@ fn main() {
     let t0 = Instant::now();
     host.hang_up();
     r.add("reconnect_ms", host.conns.recv_timeout(Duration::from_secs(5)).ok().map(|t1| ms(t1 - t0)));
+    t.close();
+
+    eprintln!("wrapper, slow redraw hook");
+    host.drain();
+    let mut c = cmd(exe, &[]);
+    c.env("BENCH_SLOW", "1");
+    let mut t = Term::spawn(c);
+    t.wait_for(PROMPT);
+    host.recv("line");
+    let (_, line, stale) = typing(&mut t, Some(&host));
+    r.add("line_slow_p50_us", pct(&line, 50));
+    r.add("line_slow_stale", stale);
     t.close();
     let _ = fs::remove_dir_all(&dir);
 
