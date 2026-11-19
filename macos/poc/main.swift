@@ -35,6 +35,21 @@ func firstTextArea(_ el: AXUIElement, depth: Int = 0) -> AXUIElement? {
     return nil
 }
 
+/// ghostty's window-padding-x / -y (left / top value) in points; default 2. shortcut: ignores config-file includes
+let ghosttyPadding: (x: CGFloat, y: CGFloat) = {
+    var out: [String: CGFloat] = ["x": 2, "y": 2]
+    for f in ["~/.config/ghostty/config", "~/Library/Application Support/com.mitchellh.ghostty/config"] {
+        guard let text = try? String(contentsOfFile: NSString(string: f).expandingTildeInPath, encoding: .utf8) else { continue }
+        for line in text.split(separator: "\n") {
+            let kv = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard kv.count == 2, kv[0].hasPrefix("window-padding-"), let a = kv[0].last.map(String.init), out[a] != nil,
+                  let v = Double(kv[1].split(separator: ",")[0].trimmingCharacters(in: .whitespaces)) else { continue }
+            out[a] = CGFloat(v)
+        }
+    }
+    return (out["x"]!, out["y"]!)
+}()
+
 /// cursor rect in ax coordinates (points, top-left origin), or nil
 func locate(_ win: AXUIElement, _ args: [Int]) -> CGRect? {
     // exact: bounds of the selected range (terminal.app, iterm2)
@@ -68,7 +83,7 @@ func locate(_ win: AXUIElement, _ args: [Int]) -> CGRect? {
         if let ta = ta, let tp = attr(ta, kAXPositionAttribute) {
             var t = CGPoint.zero
             AXValueGetValue(tp as! AXValue, .cgPoint, &t)
-            x0 = t.x + 2; y0 = t.y + 2 // shortcut: ghostty's default window-padding of 2, read the config to be exact
+            x0 = t.x + ghosttyPadding.x; y0 = t.y + ghosttyPadding.y
         }
     }
     log("window \(p) \(s) cell \(cw)x\(ch) origin \(x0),\(y0)")

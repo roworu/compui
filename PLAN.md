@@ -273,7 +273,7 @@ left:
 - phase 2: move the host to rust (`compui-host`, compcore linked, handler trait, `Tray` trait), or
   decide to keep swift for macos; `compui-pty` on `alacritty_terminal`
 - phase 3, 4: `macos/terminal`, `macos/iterm2` handlers; only the generic ax path exists
-- phase 5: ghostty padding from its config instead of the fixed 2, split check (`cols × rows`)
+- phase 5: split check (`cols × rows`)
 - phase 6: `generic` handler, hide on window move, resize and focus change (`AXObserver`), multiple
   screens, spaces, full screen
 - keys: wait up to 400 ms for candidates still being found; word start for wide chars and wrapped lines
