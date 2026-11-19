@@ -247,7 +247,7 @@ source `compui.zsh`, then the user's own rc files.
 ## status
 
 a working macos poc, tested by hand in ghostty with zsh. it differs from the layout above:
-the host is swift (`macos/poc/main.swift`, one file), not rust in `compui-host`, because it was
+the host is swift (`macos/common/` plus one folder per terminal, a swift `Handler` protocol), not rust in `compui-host`, because it was
 built and checked without a rust toolchain first; `compui-pty` parses the screen with `vt100`
 instead of `alacritty_terminal`. `./build.sh` builds `dist/`, `./test.sh` builds and starts a pure
 zsh (empty `ZDOTDIR`) under the wrapper.

@@ -1,98 +1,8 @@
-// poc host: listens on /tmp/compui-<uid>.sock for compui-pty messages, asks `compcore serve` for candidates,
+// host: listens on /tmp/compui-<uid>.sock for compui-pty messages, asks `compcore serve` for candidates,
 // finds the cursor of the frontmost terminal via accessibility and shows a non-activating popup under the
 // typed word. lives in the menu bar.
 import Cocoa
 import ApplicationServices
-
-
-/// pid and its parents, to tell whether the frontmost app is the terminal a session runs in
-func ancestors(_ pid: Int32) -> Set<Int32> {
-    var out = Set<Int32>(), p = pid
-    while p > 1 && !out.contains(p) {
-        out.insert(p)
-        // sysctl, not proc_pidinfo: that is denied for setuid processes like terminal.app's `login`
-        var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, p]
-        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { break }
-        p = info.kp_eproc.e_ppid
-    }
-    return out
-}
-
-func attr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {
-    var v: CFTypeRef?
-    return AXUIElementCopyAttributeValue(el, name as CFString, &v) == .success ? v : nil
-}
-
-func rect(of v: CFTypeRef?) -> CGRect? {
-    var r = CGRect.zero
-    guard let v = v, AXValueGetValue(v as! AXValue, .cgRect, &r) else { return nil }
-    return r
-}
-
-func firstTextArea(_ el: AXUIElement, depth: Int = 0) -> AXUIElement? {
-    if attr(el, kAXRoleAttribute) as? String == kAXTextAreaRole { return el }
-    guard depth < 6, let kids = attr(el, kAXChildrenAttribute) as? [AXUIElement] else { return nil }
-    for k in kids { if let t = firstTextArea(k, depth: depth + 1) { return t } }
-    return nil
-}
-
-/// ghostty's window-padding-x / -y (left / top value) in points; default 2. shortcut: ignores config-file includes
-let ghosttyPadding: (x: CGFloat, y: CGFloat) = {
-    var out: [String: CGFloat] = ["x": 2, "y": 2]
-    for f in ["~/.config/ghostty/config", "~/Library/Application Support/com.mitchellh.ghostty/config"] {
-        guard let text = try? String(contentsOfFile: NSString(string: f).expandingTildeInPath, encoding: .utf8) else { continue }
-        for line in text.split(separator: "\n") {
-            let kv = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard kv.count == 2, kv[0].hasPrefix("window-padding-"), let a = kv[0].last.map(String.init), out[a] != nil,
-                  let v = Double(kv[1].split(separator: ",")[0].trimmingCharacters(in: .whitespaces)) else { continue }
-            out[a] = CGFloat(v)
-        }
-    }
-    return (out["x"]!, out["y"]!)
-}()
-
-/// cursor rect in ax coordinates (points, top-left origin), or nil
-func locate(_ win: AXUIElement, _ args: [Int]) -> CGRect? {
-    // exact: bounds of the selected range (terminal.app, iterm2)
-    let ta = firstTextArea(win)
-    if let ta = ta, let sel = attr(ta, kAXSelectedTextRangeAttribute) {
-        var range = CFRange()
-        AXValueGetValue(sel as! AXValue, .cfRange, &range)
-        range.length = 1
-        let param = AXValueCreate(.cfRange, &range)!
-        var out: CFTypeRef?
-        if AXUIElementCopyParameterizedAttributeValue(ta, kAXBoundsForRangeParameterizedAttribute as CFString, param, &out) == .success,
-           let r = rect(of: out), r.width > 0 { return r }
-    }
-    // fallback: cell size from the pty's pixel size (points = px / scale), grid centred horizontally
-    // and anchored to the bottom with the same padding; without pixels, window frame / grid
-    guard args.count == 6, let pos = attr(win, kAXPositionAttribute), let size = attr(win, kAXSizeAttribute) else { return nil }
-    var p = CGPoint.zero, s = CGSize.zero
-    AXValueGetValue(pos as! AXValue, .cgPoint, &p)
-    AXValueGetValue(size as! AXValue, .cgSize, &s)
-    let (row, col, rows, cols, xpx, ypx) = (args[0], args[1], args[2], args[3], args[4], args[5])
-    var cw = s.width / CGFloat(cols), ch = s.height / CGFloat(rows)
-    var x0 = p.x, y0 = p.y
-    if xpx > 0 && ypx > 0 {
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        cw = CGFloat(xpx) / CGFloat(cols) / scale
-        ch = CGFloat(ypx) / CGFloat(rows) / scale
-        let pad = max((s.width - cw * CGFloat(cols)) / 2, 0)
-        x0 = p.x + pad
-        y0 = p.y + s.height - ch * CGFloat(rows) - pad
-        // the text area is the terminal surface: the grid starts at its top-left plus the padding
-        if let ta = ta, let tp = attr(ta, kAXPositionAttribute) {
-            var t = CGPoint.zero
-            AXValueGetValue(tp as! AXValue, .cgPoint, &t)
-            x0 = t.x + ghosttyPadding.x; y0 = t.y + ghosttyPadding.y
-        }
-    }
-    log("window \(p) \(s) cell \(cw)x\(ch) origin \(x0),\(y0)")
-    return CGRect(x: x0 + CGFloat(col) * cw, y: y0 + CGFloat(row) * ch, width: cw, height: ch)
-}
-
-func log(_ m: String) { if ProcessInfo.processInfo.environment["COMPUI_DEBUG"] != nil { FileHandle.standardError.write(Data((m + "\n").utf8)) } }
 
 guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary) else {
     print("grant accessibility to this binary's terminal, then rerun"); exit(1)
@@ -118,6 +28,8 @@ toggleItem.state = .on
 menu.addItem(toggleItem)
 menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 tray.menu = menu
+
+let handlers: [Handler] = [Ghostty(), Terminal(), Generic()]
 
 struct Cand { let label: String, insert: String, desc: String, kind: String }
 struct Ctx { let fd: Int32, session: Int, seq: Int, cell: [String: Int], grid: [String: Int], cursor: Int }
@@ -201,7 +113,8 @@ func onCandidates(_ record: String) {
     let col = max((c.cell["col"] ?? 0) - (c.cursor - s), 0)
     guard let app = NSWorkspace.shared.frontmostApplication,
           let win = attr(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedWindowAttribute),
-          let rect = locate(win as! AXUIElement, [c.cell["row"] ?? 0, col, c.grid["rows"] ?? 1, c.grid["cols"] ?? 1, c.grid["xpx"] ?? 0, c.grid["ypx"] ?? 0]) else { log("no cursor rect: frontmost app, focused window or locate failed"); hide(); return }
+          let handler = handlers.first(where: { $0.matches(app.bundleIdentifier ?? "") }),
+          let rect = handler.locate(win as! AXUIElement, GridPos(row: c.cell["row"] ?? 0, col: col, rows: c.grid["rows"] ?? 1, cols: c.grid["cols"] ?? 1, xpx: c.grid["xpx"] ?? 0, ypx: c.grid["ypx"] ?? 0)) else { log("no cursor rect: frontmost app, focused window or locate failed"); hide(); return }
     ctx = c; wordStart = s; wordEnd = e; selected = 0
     show(rect)
     if shownFd == nil { shownFd = c.fd; reply(c.fd, ["type": "shown", "session": c.session]) }

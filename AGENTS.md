@@ -29,15 +29,15 @@ Three processes talk over unix sockets:
 
 ```
 terminal ⇄ compui-pty ⇄ zsh (shell/zsh/compui.zsh)
-              └── /tmp/compui-<uid>.sock ──► compui-host (Swift, macos/poc/main.swift)
+              └── /tmp/compui-<uid>.sock ──► compui-host (Swift, macos/common/main.swift)
                                                └─ spawns `compcore serve`, draws NSPanel popup
 ```
 
 - `crates/compui-pty`: runs the shell in a pty and passes all bytes through untouched. Parses output with `vt100` to track the cursor cell and alt screen, owns a per-session socket for the zsh adapter, and takes up/down/tab/esc itself only while the host reports the popup `shown`. The wrapper is in every byte's path, so keep it thin (no engine, no UI).
 - `shell/zsh/compui.zsh`: port of kuterm's completion adapter (protocol v1). Injected via `ZDOTDIR`, reports each edit, applies `accept` lines with zle (dropped if `seq` is stale).
 - `crates/compui-proto`: serde messages pty ⇄ host as JSON lines (`hello`, `line`, `key`, `shown`, `hidden`, `accept`, `end`), `"v":1`. The Swift host reimplements this by hand, so change both sides together.
-- `macos/poc/main.swift`: single-file host. Finds the terminal app by walking parents of the pty pid, locates the text via accessibility (`AXBoundsForRange`, else cell size from the pty pixel size plus the AX text area origin; ghostty padding is read from its config, default 2), and shows a non-activating `NSPanel`.
+- `macos/common/`: the Swift host (`main.swift`: sockets, compcore, tray, `NSPanel`) and the accessibility helpers plus the `Handler` protocol (`ax.swift`). Per-terminal placement lives in `macos/ghostty/` (padding read from its config, default 2), `macos/terminal/` and `macos/generic/` (fallback); `handlers` in `main.swift` picks the first whose `matches` the frontmost bundle id. `build.sh` compiles them together with `swiftc`.
 
 ## Known divergences from PLAN.md
 
-The host is Swift rather than the planned Rust `compui-host`, and the pty uses `vt100` rather than `alacritty_terminal`. Handler/tray traits and the `macos/<terminal>/` layout in the plan don't exist yet. Cargo workspace edition is 2024.
+The host is Swift rather than the planned Rust `compui-host`, and the pty uses `vt100` rather than `alacritty_terminal`. The Swift `Handler` protocol and `macos/<terminal>/` layout exist; the Rust handler/tray traits don't. Cargo workspace edition is 2024.
