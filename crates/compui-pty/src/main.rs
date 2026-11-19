@@ -49,6 +49,17 @@ fn send(st: &mut State, m: &Msg) {
     }
 }
 
+/// the popup key a whole stdin read stands for, if any
+fn popup_key(read: &[u8]) -> Option<&'static str> {
+    match read {
+        b"\x1b[A" | b"\x1bOA" => Some("up"),
+        b"\x1b[B" | b"\x1bOB" => Some("down"),
+        b"\t" => Some("accept"),
+        b"\x1b" => Some("dismiss"),
+        _ => None,
+    }
+}
+
 fn main() {
     let size = term_size();
     let pair = native_pty_system().openpty(size).expect("openpty");
@@ -176,13 +187,7 @@ fn main() {
                 if n == 0 {
                     break;
                 }
-                let key = match &buf[..n] {
-                    b"\x1b[A" | b"\x1bOA" => Some("up"),
-                    b"\x1b[B" | b"\x1bOB" => Some("down"),
-                    b"\t" => Some("accept"),
-                    b"\x1b" => Some("dismiss"),
-                    _ => None,
-                };
+                let key = popup_key(&buf[..n]);
                 let mut st = st.lock().unwrap();
                 if let (true, Some(key)) = (st.shown && !st.parser.screen().alternate_screen(), key) {
                     let seq = st.seq;
@@ -236,4 +241,19 @@ fn main() {
     let _ = fs::remove_file(&zsh_sock);
     unsafe { libc::tcsetattr(0, libc::TCSANOW, &saved) };
     process::exit(child.wait().map(|s| s.exit_code() as i32).unwrap_or(1));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::popup_key;
+
+    #[test]
+    fn popup_keys() {
+        assert_eq!(popup_key(b"\x1b[A"), Some("up"));
+        assert_eq!(popup_key(b"\x1bOB"), Some("down"));
+        assert_eq!(popup_key(b"\t"), Some("accept"));
+        assert_eq!(popup_key(b"\x1b"), Some("dismiss"));
+        assert_eq!(popup_key(b"\x1b[A\x1b[A"), None);
+        assert_eq!(popup_key(b"a\t"), None);
+    }
 }

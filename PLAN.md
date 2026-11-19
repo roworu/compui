@@ -281,7 +281,7 @@ left:
 - permission flow and menu status text (accessibility missing), enable / disable in the tray menu
 - phase 7: `.app`, universal, sign, notarize, launch agent
 - phase 8: linux and windows handlers and trays
-- tests: pty byte-for-byte comparison against no wrapper, placement math, key filter, ax fixtures
+- tests: pty byte-for-byte comparison against no wrapper, placement math, ax fixtures (key filter has a unit test)
 - tzc (and any plugin that draws its own menu) has to be off under compUI, `[[ -z $COMPUI_SOCKET ]] && source …`
 
 ## later: linux and windows
