@@ -13,6 +13,16 @@ compUI: a fig-style completion popup for macOS terminals it doesn't own (ghostty
 - `cargo test` — only `compui-proto` has tests (message round-trip). Single test: `cargo test -p compui-proto <name>`.
 - The popup needs the macOS accessibility permission and a real terminal; there are no automated UI tests.
 
+## Testing in Terminal.app
+
+1. System Settings → Privacy & Security → Accessibility: allow Terminal. The host is started from it and inherits the permission.
+2. In Terminal.app, run `./test.sh` (builds, restarts the host, opens a pure zsh under the wrapper).
+3. In a second window or tab: `tail -f /tmp/compui-host.log`.
+4. In the first one type `git ch`. The popup should sit under the word `ch`, one cell below the cursor.
+5. Check up/down move the selection, tab inserts the candidate, esc hides it until the next word, and switching to another app hides it.
+6. Repeat with a second tab, a resized window and a different font size; the popup must follow the cursor.
+7. If it is off, send the `window … cell … origin` log line. A line without it means `AXBoundsForRange` worked (exact).
+
 ## Architecture
 
 Three processes talk over unix sockets:
