@@ -18,3 +18,7 @@ gtk4-layer-shell = "0.8.1"
 pangocairo = "0.22.9"
 serde = "1.0.229"
 zbus = "5.19.0"
+
+[[bench]]
+name = "wrapper"
+harness = false

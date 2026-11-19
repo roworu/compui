@@ -10,13 +10,15 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fs, process, thread};
 
 struct State {
     parser: vt100::Parser,
-    host: Option<UnixStream>,
+    /// lines for the host's writer thread
+    host: Option<SyncSender<String>>,
     zsh: Option<UnixStream>,
     /// the shell's newest line, sent to the host once the screen has settled so `cell` is current
     pending: Option<Value>,
@@ -63,14 +65,51 @@ fn cursor_start() -> Option<(u16, u16)> {
     Some((r.parse().ok()?, c.parse().ok()?))
 }
 
-/// best effort: the popup is optional, the terminal must work without the host
+/// how long the screen must be quiet before a line goes out, so its cursor cell is current
+const SETTLE: Duration = Duration::from_millis(15);
+
+/// best effort: the popup is optional, the terminal must work without the host. a full queue
+/// means a stuck host, whose message is dropped rather than blocking the terminal
 fn send(st: &mut State, m: &Msg) {
-    if let Some(s) = &mut st.host {
+    if let Some(tx) = &st.host {
         let line = serde_json::to_string(m).unwrap() + "\n";
-        if s.write_all(line.as_bytes()).is_err() {
+        if let Err(TrySendError::Disconnected(_)) = tx.try_send(line) {
             st.host = None;
         }
     }
+}
+
+/// one host connection: writes go through a thread of their own, the host's messages (shown,
+/// hidden, accept, the last forwarded to zsh in kuterm's protocol v1) are read until it goes away
+fn talk(h: UnixStream, st: &Mutex<State>) {
+    let Ok(mut w) = h.try_clone() else { return };
+    let (tx, rx) = sync_channel::<String>(64);
+    thread::spawn(move || {
+        for line in rx {
+            if w.write_all(line.as_bytes()).is_err() {
+                break;
+            }
+        }
+    });
+    st.lock().unwrap().host = Some(tx);
+    for line in BufReader::new(h).lines().map_while(Result::ok) {
+        let mut st = st.lock().unwrap();
+        match serde_json::from_str::<Msg>(&line) {
+            Ok(Msg::Shown { .. }) => st.shown = true,
+            Ok(Msg::Hidden { .. }) => st.shown = false,
+            Ok(Msg::Accept { seq, start, end, text, .. }) => {
+                st.shown = false;
+                if let Some(z) = &mut st.zsh {
+                    let _ = writeln!(z, "1 accept {seq} {start} {end} {text}");
+                }
+            }
+            _ => {}
+        }
+    }
+    // a popup that went with its host must not keep taking keys
+    let mut st = st.lock().unwrap();
+    st.host = None;
+    st.shown = false;
 }
 
 /// the popup key a whole stdin read stands for, if any
@@ -106,6 +145,10 @@ fn write_zsh(dir: &Path) {
 fn connect_host(sock: &str, dir: &Path) -> Option<UnixStream> {
     if let Ok(s) = UnixStream::connect(sock) {
         return Some(s);
+    }
+    // a socket given by hand (the bench) has its own host
+    if env::var_os("COMPUI_HOST_SOCKET").is_some() {
+        return None;
     }
     let exe = env::current_exe().ok()?;
     // the swift host on macos sits next to this binary
@@ -144,6 +187,10 @@ pub fn run() {
     let shell = env::var("SHELL").ok().filter(|s| s.ends_with("/zsh")).unwrap_or_else(|| "zsh".into());
     let mut cmd = CommandBuilder::new(shell);
     cmd.arg("-l");
+    // portable-pty would start it in $HOME
+    if let Ok(d) = env::current_dir() {
+        cmd.cwd(d);
+    }
     cmd.env("COMPUI_SOCKET", &zsh_sock);
     cmd.env("COMPUI_SHELL_DIR", &shell_dir);
     cmd.env("ZDOTDIR", &shell_dir);
@@ -153,10 +200,10 @@ pub fn run() {
     let mut child = pair.slave.spawn_command(cmd).expect("spawn shell");
     drop(pair.slave);
 
-    let host = connect_host(&format!("/tmp/compui-{}.sock", unsafe { libc::getuid() }), &dir);
+    let sock = env::var("COMPUI_HOST_SOCKET").unwrap_or_else(|_| format!("/tmp/compui-{}.sock", unsafe { libc::getuid() }));
     let st = Arc::new(Mutex::new(State {
         parser: vt100::Parser::new(NZ::new(size.rows).unwrap(), NZ::new(size.cols).unwrap(), 0),
-        host: host.as_ref().and_then(|h| h.try_clone().ok()),
+        host: None,
         zsh: None,
         pending: None,
         last_output: Instant::now(),
@@ -165,30 +212,29 @@ pub fn run() {
         path: env::var("PATH").unwrap_or_default(),
     }));
 
-    // host -> wrapper: shown, hidden, accept (forwarded to zsh in kuterm's protocol v1)
-    if let Some(h) = host {
+    // the host, again after it went away (crashed, or idled out as this tab connected)
+    {
         let st = st.clone();
         thread::spawn(move || {
-            for line in BufReader::new(h).lines().map_while(Result::ok) {
-                let mut st = st.lock().unwrap();
-                match serde_json::from_str::<Msg>(&line) {
-                    Ok(Msg::Shown { .. }) => st.shown = true,
-                    Ok(Msg::Hidden { .. }) => st.shown = false,
-                    Ok(Msg::Accept { seq, start, end, text, .. }) => {
-                        st.shown = false;
-                        if let Some(z) = &mut st.zsh {
-                            let _ = writeln!(z, "1 accept {seq} {start} {end} {text}");
-                        }
-                    }
-                    _ => {}
+            let mut wait = Duration::from_millis(100);
+            loop {
+                if let Some(h) = connect_host(&sock, &dir) {
+                    talk(h, &st);
+                    wait = Duration::from_millis(100);
+                } else {
+                    wait = (wait * 2).min(Duration::from_secs(60));
                 }
+                thread::sleep(wait);
             }
         });
     }
+    // wakes the settle thread when a line comes in
+    let ready = Arc::new(Condvar::new());
 
     // shell adapter -> wrapper
     {
         let st = st.clone();
+        let ready = ready.clone();
         thread::spawn(move || {
             let Ok((conn, _)) = listener.accept() else { return };
             st.lock().unwrap().zsh = conn.try_clone().ok();
@@ -200,6 +246,9 @@ pub fn run() {
                     Some("line") => {
                         st.seq = v["seq"].as_u64().unwrap_or(0);
                         st.pending = Some(v);
+                        // its redraw comes after it, so the quiet time counts from here too
+                        st.last_output = Instant::now();
+                        ready.notify_one();
                     }
                     Some("end") => {
                         st.pending = None;
@@ -215,32 +264,36 @@ pub fn run() {
     // settled screen -> line message with the cursor cell
     {
         let st = st.clone();
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_millis(10));
+        thread::spawn(move || {
             let mut st = st.lock().unwrap();
-            if st.pending.is_none() || st.last_output.elapsed() < Duration::from_millis(15) {
-                continue;
+            loop {
+                st = ready.wait_while(st, |s| s.pending.is_none()).unwrap();
+                let quiet = st.last_output.elapsed();
+                if quiet < SETTLE {
+                    st = ready.wait_timeout(st, SETTLE - quiet).unwrap().0;
+                    continue;
+                }
+                let v = st.pending.take().unwrap();
+                let screen = st.parser.screen();
+                if screen.alternate_screen() {
+                    continue;
+                }
+                let (row, col) = screen.cursor_position();
+                let s = term_size();
+                let m = Msg::Line {
+                    v: 1,
+                    session,
+                    seq: v["seq"].as_u64().unwrap_or(0),
+                    buffer: v["buffer"].as_str().unwrap_or_default().into(),
+                    cursor: v["cursor"].as_u64().unwrap_or(0) as usize,
+                    cwd: v["cwd"].as_str().unwrap_or_default().into(),
+                    path: st.path.clone(),
+                    history: v["history"].as_bool().unwrap_or(false),
+                    cell: Cell { row, col },
+                    grid: Grid { rows: s.rows, cols: s.cols, xpx: s.pixel_width, ypx: s.pixel_height },
+                };
+                send(&mut st, &m);
             }
-            let v = st.pending.take().unwrap();
-            let screen = st.parser.screen();
-            if screen.alternate_screen() {
-                continue;
-            }
-            let (row, col) = screen.cursor_position();
-            let s = term_size();
-            let m = Msg::Line {
-                v: 1,
-                session,
-                seq: v["seq"].as_u64().unwrap_or(0),
-                buffer: v["buffer"].as_str().unwrap_or_default().into(),
-                cursor: v["cursor"].as_u64().unwrap_or(0) as usize,
-                cwd: v["cwd"].as_str().unwrap_or_default().into(),
-                path: st.path.clone(),
-                history: v["history"].as_bool().unwrap_or(false),
-                cell: Cell { row, col },
-                grid: Grid { rows: s.rows, cols: s.cols, xpx: s.pixel_width, ypx: s.pixel_height },
-            };
-            send(&mut st, &m);
         });
     }
 
