@@ -10,9 +10,11 @@ func ancestors(_ pid: Int32) -> Set<Int32> {
     var out = Set<Int32>(), p = pid
     while p > 1 && !out.contains(p) {
         out.insert(p)
-        var info = proc_bsdinfo()
-        guard proc_pidinfo(p, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 else { break }
-        p = Int32(info.pbi_ppid)
+        // sysctl, not proc_pidinfo: that is denied for setuid processes like terminal.app's `login`
+        var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, p]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { break }
+        p = info.kp_eproc.e_ppid
     }
     return out
 }
