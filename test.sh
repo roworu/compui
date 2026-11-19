@@ -6,6 +6,6 @@ cd "$(dirname "$0")"
 pgrep -x compui-host | xargs kill 2>/dev/null || true # a running host would be the old build
 export ZDOTDIR="$(mktemp -d)"
 trap 'rm -rf "$ZDOTDIR"' EXIT
-echo "host log: tail -f /tmp/compui-host.log; type 'git ch' below"
 clear # the wrapper assumes the cursor starts at row 0, true only on a fresh screen
+echo "host log: tail -f /tmp/compui-host.log; type 'git ch' below"
 ./dist/compui
