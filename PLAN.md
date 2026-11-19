@@ -266,8 +266,8 @@ done:
   pty pid vs the frontmost app); no popup again until the next word after accept or esc
 - placement: exact `AXBoundsForRange` where a terminal gives it, else cell size from the pty's pixel
   size and the ax text area's origin (ghostty: surface frame plus its padding of 2)
-- one binary `compui` (`crates/compui`): the wrapper by default, `compui host` the linux host, `compui serve`
-  compcore's serve loop for the swift host. the wrapper starts the host (setsid, single instance by a lock)
+- one binary `compui` (`crates/compui`): the wrapper by default, `compui host` the host (rust on linux, the swift
+  host linked in by build.rs on macos), `compui serve` compcore's serve loop for the swift host. the wrapper starts the host (setsid, single instance by a lock)
   when the socket doesn't answer; the host exits 30s after the last wrapper left. zsh files are embedded and
   written to `$XDG_RUNTIME_DIR/compui/zsh`
 - linux (kde plasma wayland), rust host in `crates/compui` with a `Handler` trait: same socket and

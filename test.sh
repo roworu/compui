@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")"
 ./build.sh
 # a running host would be the old build; the wrapper starts the new one
-pkill -f 'compui host' 2>/dev/null || true; pkill -x compui-host 2>/dev/null || true
+pkill -f 'compui host' 2>/dev/null || true
 sleep 0.3
 export ZDOTDIR="$(mktemp -d)" COMPUI_DEBUG=1
 trap 'rm -rf "$ZDOTDIR"' EXIT

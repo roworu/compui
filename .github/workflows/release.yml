@@ -1,4 +1,4 @@
-# on a v* tag: test, build compui for linux (x86_64, arm64) and macos (arm64, with the swift host),
+# on a v* tag: test, build compui for linux (x86_64, arm64) and macos (arm64, swift host linked in),
 # and attach compui-<os>-<arch>.tar.gz to a github release, which install.sh downloads
 name: release
 on:

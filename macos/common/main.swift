@@ -1,17 +1,13 @@
-// host: listens on /tmp/compui-<uid>.sock for compui-pty messages, asks `compcore serve` for candidates,
-// finds the cursor of the frontmost terminal via accessibility and shows a non-activating popup under the
-// typed word. lives in the menu bar.
+// host (`compui host`, linked into compui by build.rs): listens on /tmp/compui-<uid>.sock for compui-pty
+// messages, asks `compui serve` for candidates, finds the cursor of the frontmost terminal via accessibility
+// and shows a non-activating popup under the typed word. lives in the menu bar.
 import Cocoa
 import ApplicationServices
 
-_ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
-
 let nsApp = NSApplication.shared
-nsApp.setActivationPolicy(.accessory)
 
 // tray: stays while the host runs
 let tray = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-tray.button?.title = "compUI"
 let menu = NSMenu()
 var enabled = true
 final class Toggle: NSObject {
@@ -20,33 +16,48 @@ final class Toggle: NSObject {
 let toggle = Toggle()
 let statusItem = NSMenuItem(title: "running", action: nil, keyEquivalent: "")
 func refreshStatus() { statusItem.title = !AXIsProcessTrusted() ? "accessibility permission missing" : enabled ? "running" : "popup off" }
-refreshStatus()
-// the permission can be granted while the host runs
-Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in refreshStatus() }
-menu.addItem(statusItem)
 let toggleItem = NSMenuItem(title: "Popup enabled", action: #selector(Toggle.flip(_:)), keyEquivalent: "")
-toggleItem.target = toggle
-toggleItem.state = .on
-menu.addItem(toggleItem)
-menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-tray.menu = menu
+
+// ~/.config/compui/config (`enabled`, `debug`), reread when it changes; the tray toggle holds until the next change
+var configDebug = false
+var configMtime: Date?, configRead = false
+func reloadConfig() {
+    let base = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"] ?? NSString(string: "~/.config").expandingTildeInPath
+    let path = base + "/compui/config"
+    let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+    if configRead && mtime == configMtime { return }
+    configRead = true; configMtime = mtime
+    var on = true
+    configDebug = false
+    for line in ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n") {
+        let kv = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+        guard kv.count == 2 else { continue }
+        let v = ["true", "yes", "on", "1"].contains(kv[1].split(separator: "#", omittingEmptySubsequences: false)[0].trimmingCharacters(in: .whitespaces))
+        switch kv[0].trimmingCharacters(in: .whitespaces) { case "enabled": on = v; case "debug": configDebug = v; default: break }
+    }
+    enabled = on; toggleItem.state = on ? .on : .off; refreshStatus()
+    if !on { hide() }
+}
 
 let handlers: [Handler] = [Ghostty(), Terminal(), ITerm2(), Generic()]
 
 struct Cand { let label: String, insert: String, desc: String, kind: String }
 struct Ctx { let fd: Int32, session: Int, seq: Int, cell: [String: Int], grid: [String: Int], cursor: Int }
 
-let panel = NSPanel(contentRect: .zero, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
-panel.level = .popUpMenu
-panel.hidesOnDeactivate = false
-panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-panel.ignoresMouseEvents = true
-// the view draws the rounded box, the window shadow follows its shape
-panel.backgroundColor = .clear
-panel.isOpaque = false
-panel.hasShadow = true
 let popupView = PopupView()
-panel.contentView = popupView
+let panel: NSPanel = {
+    let p = NSPanel(contentRect: .zero, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
+    p.level = .popUpMenu
+    p.hidesOnDeactivate = false
+    p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    p.ignoresMouseEvents = true
+    // the view draws the rounded box, the window shadow follows its shape
+    p.backgroundColor = .clear
+    p.isOpaque = false
+    p.hasShadow = true
+    p.contentView = popupView
+    return p
+}()
 
 var cands: [Cand] = []
 var selected = 0
@@ -60,6 +71,7 @@ var latestId = 0
 var requests: [Int: Ctx] = [:]
 var compcore: Process!
 var toCompcore: FileHandle!
+var clients = 0
 
 func reply(_ fd: Int32, _ obj: [String: Any]) {
     var o = obj; o["v"] = 1
@@ -116,9 +128,9 @@ func onCandidates(_ record: String) {
 }
 
 func startCompcore() {
-    let dir = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0]).deletingLastPathComponent()
     compcore = Process()
-    compcore.executableURL = dir.appendingPathComponent("compui") // compcore is linked into it
+    // this binary: compcore is linked into it
+    compcore.executableURL = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
     compcore.arguments = ["serve"]
     let inp = Pipe(), outp = Pipe()
     compcore.standardInput = inp
@@ -146,6 +158,7 @@ func handle(_ line: Data, _ fd: Int32) {
     case "line":
         guard let buffer = m["buffer"] as? String, let cursor = m["cursor"] as? Int, let cwd = m["cwd"] as? String,
               let path = m["path"] as? String, let cell = m["cell"] as? [String: Int], let grid = m["grid"] as? [String: Int] else { return }
+        reloadConfig()
         let active = NSWorkspace.shared.frontmostApplication.map { ancestors(Int32(session)).contains($0.processIdentifier) } ?? false
         log("line \(buffer.debugDescription) cell \(cell) grid \(grid) active \(active) enabled \(enabled)")
         if m["history"] as? Bool == true || !active || !enabled || !AXIsProcessTrusted() || buffer.trimmingCharacters(in: .whitespaces).isEmpty { latestId += 1; if shownFd == fd { hide() }; return }
@@ -184,41 +197,63 @@ func watch(_ pid: pid_t, _ win: AXUIElement) {
     axObserver = o; watched = (pid, win)
 }
 
-NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
-    if let fd = shownFd { _ = fd; hide() }
-}
+/// runs the host; called by `compui host` on the main thread, never returns
+@_cdecl("compui_host_main")
+public func hostMain() {
+    _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+    nsApp.setActivationPolicy(.accessory)
+    tray.button?.title = "compUI"
+    menu.addItem(statusItem)
+    toggleItem.target = toggle
+    menu.addItem(toggleItem)
+    menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    tray.menu = menu
+    reloadConfig()
+    // the permission can be granted while the host runs
+    Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in refreshStatus() }
 
-// socket server on a background thread, one thread per client
-let path = "/tmp/compui-\(getuid()).sock"
-unlink(path)
-let srv = socket(AF_UNIX, SOCK_STREAM, 0)
-var addr = sockaddr_un()
-addr.sun_family = sa_family_t(AF_UNIX)
-withUnsafeMutableBytes(of: &addr.sun_path) { dst in path.utf8CString.withUnsafeBytes { src in dst.copyMemory(from: UnsafeRawBufferPointer(rebasing: src.prefix(dst.count - 1))) } }
-_ = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(srv, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
-listen(srv, 8)
-startCompcore()
-Thread.detachNewThread {
-    while true {
-        let c = accept(srv, nil, nil)
-        if c < 0 { continue }
-        Thread.detachNewThread {
-            var pending = Data()
-            var buf = [UInt8](repeating: 0, count: 4096)
-            while true {
-                let n = read(c, &buf, buf.count)
-                if n <= 0 { break }
-                pending.append(contentsOf: buf[..<n])
-                while let nl = pending.firstIndex(of: 10) {
-                    let l = pending[..<nl]
-                    pending.removeSubrange(...nl)
-                    DispatchQueue.main.async { handle(Data(l), c) }
+    NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+        if let fd = shownFd { _ = fd; hide() }
+    }
+
+    // socket server on a background thread, one thread per client
+    let path = "/tmp/compui-\(getuid()).sock"
+    unlink(path)
+    let srv = socket(AF_UNIX, SOCK_STREAM, 0)
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutableBytes(of: &addr.sun_path) { dst in path.utf8CString.withUnsafeBytes { src in dst.copyMemory(from: UnsafeRawBufferPointer(rebasing: src.prefix(dst.count - 1))) } }
+    _ = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(srv, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+    listen(srv, 8)
+    startCompcore()
+    Thread.detachNewThread {
+        while true {
+            let c = accept(srv, nil, nil)
+            if c < 0 { continue }
+            DispatchQueue.main.async { clients += 1 }
+            Thread.detachNewThread {
+                var pending = Data()
+                var buf = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let n = read(c, &buf, buf.count)
+                    if n <= 0 { break }
+                    pending.append(contentsOf: buf[..<n])
+                    while let nl = pending.firstIndex(of: 10) {
+                        let l = pending[..<nl]
+                        pending.removeSubrange(...nl)
+                        DispatchQueue.main.async { handle(Data(l), c) }
+                    }
+                }
+                DispatchQueue.main.async {
+                    if shownFd == c { hide() }
+                    close(c)
+                    // no wrapper left for 30s: quit, the next one starts a host again
+                    clients -= 1
+                    if clients == 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 30) { if clients == 0 { exit(0) } } }
                 }
             }
-            DispatchQueue.main.async { if shownFd == c { hide() } }
-            close(c)
         }
     }
+    log("listening on \(path)")
+    nsApp.run()
 }
-print("compui host listening on \(path)")
-nsApp.run()

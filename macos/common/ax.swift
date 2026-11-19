@@ -1,7 +1,7 @@
 import Cocoa
 import ApplicationServices
 
-func log(_ m: String) { if ProcessInfo.processInfo.environment["COMPUI_DEBUG"] != nil { FileHandle.standardError.write(Data((m + "\n").utf8)) } }
+func log(_ m: String) { if configDebug || ProcessInfo.processInfo.environment["COMPUI_DEBUG"] != nil { FileHandle.standardError.write(Data((m + "\n").utf8)) } }
 
 /// pid and its parents, to tell whether the frontmost app is the terminal a session runs in
 func ancestors(_ pid: Int32) -> Set<Int32> {

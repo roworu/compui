@@ -155,13 +155,8 @@ fn connect_host(sock: &str, dir: &Path) -> Option<UnixStream> {
     if env::var_os("COMPUI_HOST_SOCKET").is_some() {
         return None;
     }
-    let exe = env::current_exe().ok()?;
-    // the swift host on macos sits next to this binary
-    let mut cmd = Command::new(&exe);
+    let mut cmd = Command::new(env::current_exe().ok()?);
     cmd.arg("host");
-    if cfg!(target_os = "macos") {
-        cmd = Command::new(exe.with_file_name("compui-host"));
-    }
     let log = fs::File::create(dir.join("host.log")).ok()?;
     cmd.current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(log);
     unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }) };

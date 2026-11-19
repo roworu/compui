@@ -19,6 +19,7 @@ curl -fsSL "https://github.com/roworu/compui/releases/latest/download/compui-$os
 mkdir -p "$bin"
 # moved over, not written in place: running wrappers keep their old file and macos keeps the signature valid
 for f in "$tmp"/*; do mv -f "$f" "$bin/"; done
+rm -f "$bin/compui-host" # older macos releases had the host as a second binary
 echo "compUI installed: $bin/compui"
 [ "$os" = linux ] && echo "needs gtk4 and gtk4-layer-shell, and kde plasma on wayland for the popup"
 cat <<M

@@ -20,6 +20,9 @@ pangocairo = "0.22.9"
 serde = "1.0.229"
 zbus = "5.19.0"
 
+[build-dependencies]
+serde_json = "1.0.154"
+
 [dev-dependencies]
 vt100 = "0.18.1"
 

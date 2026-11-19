@@ -1,8 +1,8 @@
 //! `compui`: runs the shell wrapper (`pty.rs`) and starts the host if none answers. `compui host`
 //! is the host: listens on /tmp/compui-<uid>.sock for wrapper messages, asks compcore (linked) for
 //! candidates, finds the cursor of the active terminal through a per-terminal handler and shows a popup
-//! under the typed word. the rust host is linux only; macos runs the swift host in `macos/`, which
-//! gets candidates from `compui serve`
+//! under the typed word. the rust host is linux only; on macos `compui host` runs the swift host in
+//! `macos/` (linked in by build.rs), which gets candidates from `compui serve`
 #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused))]
 
 mod cursor;
@@ -464,7 +464,12 @@ fn serve_stdio() {
     let _ = compcore::serve::run(BufReader::new(std::io::stdin()), std::io::stdout().lock(), &specs(), true);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    /// the swift host's run loop (`macos/common/main.swift`), never returns
+    fn compui_host_main();
+}
+
 fn host() {
     // one host per user: one started by a racing wrapper leaves
     let dir = runtime_dir();
@@ -473,13 +478,12 @@ fn host() {
     if lock.try_lock().is_err() {
         return;
     }
+    #[cfg(target_os = "linux")]
     common::run(vec![Box::new(ghostty::Ghostty::default()), Box::new(konsole::Konsole::default())]);
-}
-
-#[cfg(not(target_os = "linux"))]
-fn host() {
-    eprintln!("the rust host runs on linux only; on macos build the swift host");
-    std::process::exit(1);
+    #[cfg(target_os = "macos")]
+    unsafe { compui_host_main() };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    eprintln!("no host for this os");
 }
 
 fn main() {
