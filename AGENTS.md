@@ -26,7 +26,7 @@ terminal ⇄ compui-pty ⇄ zsh (shell/zsh/compui.zsh)
 - `crates/compui-pty`: runs the shell in a pty and passes all bytes through untouched. Parses output with `vt100` to track the cursor cell and alt screen, owns a per-session socket for the zsh adapter, and takes up/down/tab/esc itself only while the host reports the popup `shown`. The wrapper is in every byte's path, so keep it thin (no engine, no UI).
 - `shell/zsh/compui.zsh`: port of kuterm's completion adapter (protocol v1). Injected via `ZDOTDIR`, reports each edit, applies `accept` lines with zle (dropped if `seq` is stale).
 - `crates/compui-proto`: serde messages pty ⇄ host as JSON lines (`hello`, `line`, `key`, `shown`, `hidden`, `accept`, `end`), `"v":1`. The Swift host reimplements this by hand, so change both sides together.
-- `macos/poc/main.swift`: single-file host. Finds the terminal app by walking parents of the pty pid, locates the text via accessibility (`AXBoundsForRange`, else cell size from the pty pixel size plus the AX text area origin; ghostty padding is a fixed 2), and shows a non-activating `NSPanel`.
+- `macos/poc/main.swift`: single-file host. Finds the terminal app by walking parents of the pty pid, locates the text via accessibility (`AXBoundsForRange`, else cell size from the pty pixel size plus the AX text area origin; ghostty padding is read from its config, default 2), and shows a non-activating `NSPanel`.
 
 ## Known divergences from PLAN.md
 
