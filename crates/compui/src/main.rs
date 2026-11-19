@@ -5,6 +5,7 @@
 //! gets candidates from `compui serve`
 #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused))]
 
+mod cursor;
 mod pty;
 
 #[cfg(target_os = "linux")]

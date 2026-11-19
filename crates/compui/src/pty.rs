@@ -1,11 +1,11 @@
 //! runs the user's shell in a pty, passes every byte through, reports the line and cursor cell to
 //! the host and takes the popup keys while the host shows it
+use crate::cursor::Tracker;
 use crate::runtime_dir;
 use compui_proto::{Cell, Grid, Msg};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::num::NonZeroU16 as NZ;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, fs, process, thread};
 
 struct State {
-    parser: vt100::Parser,
+    parser: Tracker,
     /// lines for the host's writer thread
     host: Option<SyncSender<String>>,
     zsh: Option<UnixStream>,
@@ -207,7 +207,7 @@ pub fn run() {
 
     let sock = env::var("COMPUI_HOST_SOCKET").unwrap_or_else(|_| format!("/tmp/compui-{}.sock", unsafe { libc::getuid() }));
     let st = Arc::new(Mutex::new(State {
-        parser: vt100::Parser::new(NZ::new(size.rows).unwrap(), NZ::new(size.cols).unwrap(), 0),
+        parser: Tracker::new(size.rows, size.cols),
         host: None,
         zsh: None,
         pending: None,
@@ -285,11 +285,10 @@ pub fn run() {
                     continue;
                 }
                 let v = st.pending.take().unwrap();
-                let screen = st.parser.screen();
-                if screen.alternate_screen() {
+                if st.parser.alternate_screen() {
                     continue;
                 }
-                let (row, col) = screen.cursor_position();
+                let (row, col) = st.parser.cursor_position();
                 let s = term_size();
                 let m = Msg::Line {
                     v: 1,
@@ -327,7 +326,7 @@ pub fn run() {
                 }
                 let key = popup_key(&buf[..n]);
                 let mut st = st.lock().unwrap();
-                if let (true, Some(key)) = (st.shown && !st.parser.screen().alternate_screen(), key) {
+                if let (true, Some(key)) = (st.shown && !st.parser.alternate_screen(), key) {
                     let seq = st.seq;
                     send(&mut st, &Msg::Key { v: 1, session, seq, key: key.into() });
                     continue;
@@ -351,7 +350,7 @@ pub fn run() {
                 let s = term_size();
                 if (s.rows, s.cols) != (last.rows, last.cols) {
                     m2.lock().unwrap().resize(s).ok();
-                    st.lock().unwrap().parser.screen_mut().set_size(NZ::new(s.rows).unwrap(), NZ::new(s.cols).unwrap());
+                    st.lock().unwrap().parser.set_size(s.rows, s.cols);
                     last = s;
                 }
             }
@@ -372,7 +371,7 @@ pub fn run() {
             st.echoed = true;
             ready.notify_one();
         }
-        if st.shown && st.parser.screen().alternate_screen() {
+        if st.shown && st.parser.alternate_screen() {
             st.shown = false;
             send(&mut st, &Msg::End { v: 1, session });
         }
