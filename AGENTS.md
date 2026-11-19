@@ -40,4 +40,4 @@ terminal ⇄ compui-pty ⇄ zsh (shell/zsh/compui.zsh)
 
 ## Known divergences from PLAN.md
 
-The host is Swift rather than the planned Rust `compui-host`, and the pty uses `vt100` rather than `alacritty_terminal`. The Swift `Handler` protocol and `macos/<terminal>/` layout exist; the Rust handler/tray traits don't. Cargo workspace edition is 2024.
+On macOS the host is Swift rather than the planned Rust `compui-host`; on Linux (KDE Wayland) it is Rust (`crates/compui-host`, which pulls in `linux/common/main.rs`, `linux/ghostty/main.rs` and `linux/konsole/main.rs` via `#[path]`, popup via gtk4-layer-shell drawn with cairo/pango in `linux/common/popup.rs` (the Swift twin is `macos/common/popup.swift`, keep their look in sync), window position from a KWin script over D-Bus, `compcore serve` as a child instead of linked). The pty uses `vt100` rather than `alacritty_terminal`. The Rust `Handler` trait exists; the `Tray` trait doesn't. Cargo workspace edition is 2024.

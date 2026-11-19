@@ -267,6 +267,20 @@ done:
 - placement: exact `AXBoundsForRange` where a terminal gives it, else cell size from the pty's pixel
   size and the ax text area's origin (ghostty: surface frame plus its padding of 2)
 - launcher `dist/compui` starts the host, and replaces one whose socket is dead
+- linux (kde plasma wayland), rust host in `crates/compui-host` with a `Handler` trait: same socket and
+  view logic as the swift host, `compcore serve` as a child; `linux/common` loads a kwin script that reports
+  the active window (pid, client rect, output, scale) over d-bus, draws the popup as a gtk4 layer-shell
+  overlay with no keyboard or mouse input, and puts a ksni tray up (status, enable, quit). `linux/ghostty`:
+  cell size from `xpx/ypx` (floored per cell), grid left from the client rect plus `window-padding-x`, grid
+  top from the client bottom minus `window-padding-y` (no header bar height needed); a grid narrower than
+  the window is a split, no popup. `linux/konsole`: the same from the bottom, konsole's pixel size is its
+  text area in logical px; insets from the default profile (`TerminalMargin`, `HighlightScrolledLines`,
+  `ScrollBarPosition`)
+- popup drawn like kuterm's on both oses (`macos/common/popup.swift`, `linux/common/popup.rs`): kuterm's
+  one dark / one light colors by the system appearance, rounded box with border and shadow, rows one
+  terminal line high, font sized to the cell width, label column in the kind's color, smaller muted
+  descriptions, the selected one's whole description under a divider, scrollbar thumb, kuterm's scrolling
+  and its below / above rule
 
 left:
 
@@ -276,10 +290,11 @@ left:
 - phase 5: split check (`cols × rows`)
 - phase 6: multiple screens, spaces, full screen
 - keys: wait up to 400 ms for candidates still being found; word start for wide chars and wrapped lines
-- popup: pick by mouse is off; kind colors are fixed, not from the terminal palette
+- popup: pick by mouse is off; colors are kuterm's bundled themes, not the terminal's palette or font
 - permission flow: the prompt shows on start, and the tray status line says when it is missing; no guided setup yet
 - phase 7: `.app`, universal, sign, notarize, launch agent
-- phase 8: linux and windows handlers and trays
+- phase 8: gnome-terminal handler, konsole sessions with a non-default profile, gnome (no kwin, no layer-shell), windows; on linux the
+  `Tray` trait, `window-padding-balance`, splits stacked vertically and a bottom tab bar in ghostty
 - tests: pty byte-for-byte comparison against no wrapper, placement math, ax fixtures (key filter has a unit test)
 - tzc (and any plugin that draws its own menu) has to be off under compUI, `[[ -z $COMPUI_SOCKET ]] && source …`
 

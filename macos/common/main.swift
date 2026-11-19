@@ -36,22 +36,22 @@ let handlers: [Handler] = [Ghostty(), Terminal(), ITerm2(), Generic()]
 struct Cand { let label: String, insert: String, desc: String, kind: String }
 struct Ctx { let fd: Int32, session: Int, seq: Int, cell: [String: Int], grid: [String: Int], cursor: Int }
 
-let label = NSTextField(labelWithString: "")
-let pad: CGFloat = 6
 let panel = NSPanel(contentRect: .zero, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
 panel.level = .popUpMenu
 panel.hidesOnDeactivate = false
 panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 panel.ignoresMouseEvents = true
-panel.backgroundColor = NSColor(white: 0.1, alpha: 0.95)
-panel.contentView?.addSubview(label)
-
-let kindColor: [String: NSColor] = ["subcommand": .magenta, "suggestion": .cyan, "option": .yellow,
-                                    "command": .green, "folder": .blue, "file": .white]
-let maxRows = 8
+// the view draws the rounded box, the window shadow follows its shape
+panel.backgroundColor = .clear
+panel.isOpaque = false
+panel.hasShadow = true
+let popupView = PopupView()
+panel.contentView = popupView
 
 var cands: [Cand] = []
 var selected = 0
+var top = 0 // first candidate shown
+var cursorRect = CGRect.zero // the word's first cell, ax coordinates
 var ctx: Ctx?
 var wordStart = 0, wordEnd = 0
 var suppressed: (fd: Int32, start: Int)?  // word the user accepted or dismissed, no popup until the next one
@@ -72,30 +72,22 @@ func hide() {
     shownFd = nil
 }
 
-func render() {
-    let top = min(max(selected - maxRows + 1, 0), max(cands.count - maxRows, 0))
-    let text = NSMutableAttributedString()
-    let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    for (i, c) in cands[top..<min(top + maxRows, cands.count)].enumerated() {
-        var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: kindColor[c.kind] ?? .white]
-        if top + i == selected { attrs[.backgroundColor] = NSColor(white: 0.3, alpha: 1) }
-        text.append(NSAttributedString(string: c.label + (c.desc.isEmpty ? "" : "  " + c.desc) + (i < min(maxRows, cands.count - top) - 1 ? "\n" : ""), attributes: attrs))
-    }
-    label.attributedStringValue = text
-    let size = label.fittingSize
-    label.frame = NSRect(x: pad, y: pad, width: size.width, height: size.height)
-    panel.setContentSize(NSSize(width: size.width + 2 * pad, height: size.height + 2 * pad))
-}
-
 func show(_ cursor: CGRect) {
-    render()
+    cursorRect = cursor
     // ax is top-left origin on the primary screen, appkit is bottom-left
     let primaryH = NSScreen.screens[0].frame.height
-    var origin = NSPoint(x: cursor.minX - pad, y: primaryH - cursor.maxY - panel.frame.height)
     let visible = (NSScreen.screens.first { $0.frame.contains(NSPoint(x: cursor.midX, y: primaryH - cursor.midY)) } ?? NSScreen.screens[0]).visibleFrame
-    if origin.y < visible.minY { origin.y = primaryH - cursor.minY } // flip above
-    origin.x = min(max(origin.x, visible.minX), visible.maxX - panel.frame.width)
-    panel.setFrameOrigin(origin)
+    let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    let size = popupView.layout(cands, selected: selected, top: top, cell: cursor.size, maxWidth: visible.width - 8, dark: dark)
+    panel.setContentSize(size)
+    // below the line, above when it doesn't fit there and there is more room above; 4 pt off the edges
+    let (visTop, visBottom) = (primaryH - visible.maxY, primaryH - visible.minY)
+    let above = cursor.maxY + size.height > visBottom - 4 && cursor.minY - visTop > visBottom - cursor.maxY
+    let axY = above ? cursor.minY - size.height : cursor.maxY
+    let x = max(min(cursor.minX, visible.maxX - size.width - 4), visible.minX + 4)
+    panel.setFrameOrigin(NSPoint(x: x, y: primaryH - axY - size.height))
+    popupView.display()
+    panel.invalidateShadow()
     panel.orderFrontRegardless()
 }
 
@@ -117,7 +109,7 @@ func onCandidates(_ record: String) {
           let win = attr(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedWindowAttribute),
           let handler = handlers.first(where: { $0.matches(app.bundleIdentifier ?? "") }),
           let rect = handler.locate(win as! AXUIElement, GridPos(row: c.cell["row"] ?? 0, col: col, rows: c.grid["rows"] ?? 1, cols: c.grid["cols"] ?? 1, xpx: c.grid["xpx"] ?? 0, ypx: c.grid["ypx"] ?? 0)) else { log("no cursor rect: frontmost app, focused window or locate failed"); hide(); return }
-    ctx = c; wordStart = s; wordEnd = e; selected = 0
+    ctx = c; wordStart = s; wordEnd = e; selected = 0; top = 0
     watch(app.processIdentifier, win as! AXUIElement)
     show(rect)
     if shownFd == nil { shownFd = c.fd; reply(c.fd, ["type": "shown", "session": c.session]) }
@@ -163,8 +155,8 @@ func handle(_ line: Data, _ fd: Int32) {
     case "key":
         guard shownFd == fd, let c = ctx, !cands.isEmpty else { return }
         switch m["key"] as? String {
-        case "up": selected = (selected + cands.count - 1) % cands.count; render()
-        case "down": selected = (selected + 1) % cands.count; render()
+        case "up": selected = (selected + cands.count - 1) % cands.count; scrollToSelected(); show(cursorRect)
+        case "down": selected = (selected + 1) % cands.count; scrollToSelected(); show(cursorRect)
         case "accept":
             reply(fd, ["type": "accept", "session": c.session, "seq": c.seq, "start": wordStart, "end": wordEnd, "text": cands[selected].insert])
             suppressed = (fd, wordStart); shownFd = nil; panel.orderOut(nil)
@@ -174,6 +166,9 @@ func handle(_ line: Data, _ fd: Int32) {
     default: break
     }
 }
+
+/// scrolls only as far as needed to keep the selection in view, as kuterm does
+func scrollToSelected() { top = max(min(top, selected), selected - maxRows + 1) }
 
 // hide when the window the popup sits over moves or resizes, or the app's focused window changes
 var watched: (pid: pid_t, win: AXUIElement)?

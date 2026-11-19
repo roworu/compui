@@ -1,0 +1,18 @@
+[package]
+name = "compui-host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-channel = "2.5.0"
+compui-proto = { version = "0.1.0", path = "../compui-proto" }
+libc = "0.2.191"
+serde_json = "1.0.154"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk4 = { version = "0.11.5", features = ["v4_12"] }
+gtk4-layer-shell = "0.8.1"
+ksni = { version = "0.3.7", default-features = false, features = ["blocking", "async-io"] }
+pangocairo = "0.22.9"
+serde = "1.0.229"
+zbus = "5.19.0"
