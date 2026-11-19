@@ -24,5 +24,6 @@ echo "compUI installed: $bin/compui"
 [ "$os" = linux ] && echo "needs gtk4 and gtk4-layer-shell, and kde plasma on wayland for the popup"
 cat <<M
 point your terminal at it instead of the shell, e.g. ghostty: command = $bin/compui
+konsole: as the profile's Command, else it warns on every close that compui is still running
 or at the top of ~/.zshrc:  [[ -z \$COMPUI_SOCKET ]] && exec $bin/compui
 M
