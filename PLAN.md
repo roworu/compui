@@ -256,7 +256,7 @@ done:
 
 - `compui-proto`: `hello`, `line` (buffer, cursor, cwd, path, cell, grid), `key`, `shown`, `hidden`,
   `accept`, `end`; round-trip test
-- `compui-pty`: pty pass-through with exit code, size polling, `vt100` cursor cell, adapter socket
+- `compui-pty`: pty pass-through with exit code, size polling, `vt100` cursor cell (seeded with a cursor position query at start), adapter socket
   per session, line sent once the screen settles, popup keys (up, down, tab, esc) taken while shown,
   accept forwarded to zsh, `end` on alt screen
 - `shell/zsh`: kuterm's completion adapter ported, injected through `ZDOTDIR`

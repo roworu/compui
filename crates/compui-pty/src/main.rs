@@ -39,6 +39,26 @@ fn raw_mode() -> libc::termios {
     }
 }
 
+/// asks the terminal where its cursor is (1-based row, col), so the parser starts in sync with a screen that
+/// already has output; None if it does not answer. shortcut: typed-ahead bytes read here are dropped
+fn cursor_start() -> Option<(u16, u16)> {
+    std::io::stdout().write_all(b"\x1b[6n").and_then(|_| std::io::stdout().flush()).ok()?;
+    let (mut reply, mut b) = (Vec::new(), [0u8; 32]);
+    let end = Instant::now() + Duration::from_millis(200);
+    while !reply.ends_with(b"R") {
+        let left = end.checked_duration_since(Instant::now())?.as_millis() as i32;
+        let mut p = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
+        if unsafe { libc::poll(&mut p, 1, left) } <= 0 {
+            return None;
+        }
+        let n = std::io::stdin().read(&mut b).ok().filter(|n| *n > 0)?;
+        reply.extend_from_slice(&b[..n]);
+    }
+    let text = String::from_utf8_lossy(&reply);
+    let (r, c) = text.rsplit_once("\x1b[")?.1.trim_end_matches('R').split_once(';')?;
+    Some((r.parse().ok()?, c.parse().ok()?))
+}
+
 /// best effort: the popup is optional, the terminal must work without the host
 fn send(st: &mut State, m: &Msg) {
     if let Some(s) = &mut st.host {
@@ -174,6 +194,9 @@ fn main() {
     }
 
     let saved = raw_mode();
+    if let Some((r, c)) = cursor_start() {
+        st.lock().unwrap().parser.process(format!("\x1b[{r};{c}H").as_bytes());
+    }
     let master = Arc::new(Mutex::new(pair.master));
     let mut reader = master.lock().unwrap().try_clone_reader().unwrap();
     let mut writer = master.lock().unwrap().take_writer().unwrap();
