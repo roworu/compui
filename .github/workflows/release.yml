@@ -9,17 +9,23 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
+        # linux in ubuntu 26.04: 24.04 has no gtk4-layer-shell package
         include:
-          - { runner: ubuntu-24.04, name: linux-x86_64 }
-          - { runner: ubuntu-24.04-arm, name: linux-arm64 }
-          - { runner: macos-14, name: macos-arm64 }
+          - { runner: ubuntu-24.04, container: "ubuntu:26.04", name: linux-x86_64 }
+          - { runner: ubuntu-24.04-arm, container: "ubuntu:26.04", name: linux-arm64 }
+          - { runner: macos-15, container: "", name: macos-arm64 }
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
     steps:
+      - if: runner.os == 'Linux'
+        run: |
+          apt-get update && apt-get install -y build-essential curl git pkg-config libgtk-4-dev libgtk4-layer-shell-dev
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@v4
       - run: rustup update stable && rustup default stable
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgtk4-layer-shell-dev
       - run: cargo test
       - run: ./build.sh
       - run: tar -C dist -czf compui-${{ matrix.name }}.tar.gz .
