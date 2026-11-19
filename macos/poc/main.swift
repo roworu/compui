@@ -88,6 +88,15 @@ nsApp.setActivationPolicy(.accessory)
 let tray = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 tray.button?.title = "compUI"
 let menu = NSMenu()
+var enabled = true
+final class Toggle: NSObject {
+    @objc func flip(_ item: NSMenuItem) { enabled.toggle(); item.state = enabled ? .on : .off; if !enabled { hide() } }
+}
+let toggle = Toggle()
+let toggleItem = NSMenuItem(title: "Popup enabled", action: #selector(Toggle.flip(_:)), keyEquivalent: "")
+toggleItem.target = toggle
+toggleItem.state = .on
+menu.addItem(toggleItem)
 menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 tray.menu = menu
 
@@ -210,7 +219,7 @@ func handle(_ line: Data, _ fd: Int32) {
         guard let buffer = m["buffer"] as? String, let cursor = m["cursor"] as? Int, let cwd = m["cwd"] as? String,
               let path = m["path"] as? String, let cell = m["cell"] as? [String: Int], let grid = m["grid"] as? [String: Int] else { return }
         let active = NSWorkspace.shared.frontmostApplication.map { ancestors(Int32(session)).contains($0.processIdentifier) } ?? false
-        if m["history"] as? Bool == true || !active || buffer.trimmingCharacters(in: .whitespaces).isEmpty { latestId += 1; if shownFd == fd { hide() }; return }
+        if m["history"] as? Bool == true || !active || !enabled || buffer.trimmingCharacters(in: .whitespaces).isEmpty { latestId += 1; if shownFd == fd { hide() }; return }
         latestId += 1
         requests[latestId] = Ctx(fd: fd, session: session, seq: m["seq"] as? Int ?? 0, cell: cell, grid: grid, cursor: cursor)
         toCompcore.write(Data("\(latestId)\u{1f}\(cursor)\u{1f}\(cwd)\u{1f}\(path)\u{1f}\(buffer)\0".utf8))
