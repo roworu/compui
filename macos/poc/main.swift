@@ -90,9 +90,11 @@ tray.button?.title = "compUI"
 let menu = NSMenu()
 var enabled = true
 final class Toggle: NSObject {
-    @objc func flip(_ item: NSMenuItem) { enabled.toggle(); item.state = enabled ? .on : .off; if !enabled { hide() } }
+    @objc func flip(_ item: NSMenuItem) { enabled.toggle(); item.state = enabled ? .on : .off; statusItem.title = enabled ? "running" : "popup off"; if !enabled { hide() } }
 }
 let toggle = Toggle()
+let statusItem = NSMenuItem(title: "running", action: nil, keyEquivalent: "")
+menu.addItem(statusItem)
 let toggleItem = NSMenuItem(title: "Popup enabled", action: #selector(Toggle.flip(_:)), keyEquivalent: "")
 toggleItem.target = toggle
 toggleItem.state = .on

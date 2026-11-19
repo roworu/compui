@@ -278,7 +278,7 @@ left:
   screens, spaces, full screen
 - keys: wait up to 400 ms for candidates still being found; word start for wide chars and wrapped lines
 - popup: pick by mouse is off; kind colors are fixed, not from the terminal palette
-- permission flow and menu status text (accessibility missing); the tray has an enable / disable item
+- permission flow and menu status text for accessibility missing (running / popup off exist); the tray has an enable / disable item
 - phase 7: `.app`, universal, sign, notarize, launch agent
 - phase 8: linux and windows handlers and trays
 - tests: pty byte-for-byte comparison against no wrapper, placement math, ax fixtures (key filter has a unit test)
