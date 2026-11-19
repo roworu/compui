@@ -1,8 +1,8 @@
 //! the popup as a gtk4 layer-shell overlay, drawn like kuterm's: kuterm's one dark / one light colors,
 //! rows one terminal line high, label column in the kind's color, smaller muted descriptions, the
 //! selected one's whole description under a divider, a scrollbar thumb when the list is longer
-use crate::{App, Cand, Popup, ROWS, Rect, log};
-use gtk4::{self as gtk, cairo, gdk, pango, prelude::*};
+use crate::{App, Cand, Ev, Popup, ROWS, Rect, log};
+use gtk4::{self as gtk, cairo, gdk, glib, pango, prelude::*};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::{cell::RefCell, rc::Rc};
 use zbus::blocking::Connection;
@@ -30,6 +30,7 @@ impl Theme {
             "option" => self.kinds[2],
             "command" => self.kinds[3],
             "folder" => self.kinds[4],
+            "history" => self.muted,
             _ => self.text,
         }
     }
@@ -166,7 +167,7 @@ fn draw(v: &View, cr: &cairo::Context) {
 }
 
 impl Gtk {
-    pub fn new() -> Self {
+    pub fn new(tx: async_channel::Sender<Ev>) -> Self {
         let win = gtk::Window::new();
         win.init_layer_shell();
         win.set_namespace(Some("compui"));
@@ -175,7 +176,7 @@ impl Gtk {
         win.set_anchor(Edge::Top, true);
         win.set_anchor(Edge::Left, true);
         win.add_css_class("compui");
-        // ignores the mouse in v1, a click would go to the popup instead of the terminal
+        // only the box takes the mouse (for the wheel), set in `show`; the shadow lets it through
         win.connect_map(|w| {
             if let Some(s) = w.surface() {
                 s.set_input_region(Some(&cairo::Region::create()));
@@ -188,6 +189,13 @@ impl Gtk {
         let area = gtk::DrawingArea::new();
         let v = view.clone();
         area.set_draw_func(move |_, cr, _, _| draw(&v.borrow(), cr));
+        // discrete: touchpad deltas are summed into whole rows
+        let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::DISCRETE);
+        wheel.connect_scroll(move |_, _, dy| {
+            let _ = tx.send_blocking(Ev::Scroll(dy.round() as i32));
+            glib::Propagation::Stop
+        });
+        area.add_controller(wheel);
         win.set_child(Some(&area));
         Gtk { win, area, view, bus: Connection::session().ok() }
     }
@@ -263,6 +271,10 @@ impl Popup for Gtk {
         self.win.set_default_size(sw, sh);
         self.area.queue_draw();
         self.win.set_visible(true);
+        if let Some(s) = self.win.surface() {
+            let r = cairo::RectangleInt::new(SHADOW.0 as i32, SHADOW.1 as i32, w as i32, h as i32);
+            s.set_input_region(Some(&cairo::Region::create_rectangle(&r)));
+        }
     }
 
     fn hide(&mut self) {

@@ -142,6 +142,8 @@ pub enum Ev {
     Cands(String),
     /// the active window changed, moved or resized
     Window(App),
+    /// mouse wheel over the popup, in rows, down positive
+    Scroll(i32),
     /// some time after the last wrapper left
     Idle,
     Quit,
@@ -168,6 +170,7 @@ struct Ctx {
     xpx: u16,
     ypx: u16,
     cursor: usize,
+    recent: Vec<String>,
 }
 
 pub struct Host<P: Popup> {
@@ -324,23 +327,35 @@ impl<P: Popup> Host<P> {
         }
     }
 
+    /// moves the list by `n` rows, the selection kept in view
+    fn scroll(&mut self, n: i32) {
+        if self.shown.is_none() || self.cands.len() <= ROWS {
+            return;
+        }
+        self.top = self.top.saturating_add_signed(n as isize).min(self.cands.len() - ROWS);
+        self.selected = self.selected.clamp(self.top, self.top + ROWS - 1);
+        self.show();
+    }
+
     fn on_cands(&mut self, rec: &str) {
         let Some((id, start, end, cands)) = parse_reply(rec) else { return };
         log(&format!("candidates {}", cands.len()));
         if self.request.as_ref().map(|r| r.0) != Some(id) {
             return;
         }
-        let (_, c) = self.request.take().unwrap();
+        let (_, mut c) = self.request.take().unwrap();
+        let recent = std::mem::take(&mut c.recent);
         let client = c.client;
         // shortcut: the word's first cell is the cursor cell minus its chars, no wrapping or wide chars
         let col = c.col.saturating_sub(c.cursor.saturating_sub(start) as u16);
         self.ctx = Some(Ctx { col, ..c });
-        if cands.is_empty() || self.suppressed == Some((client, start)) {
+        if (cands.is_empty() && recent.is_empty()) || self.suppressed == Some((client, start)) {
             return self.hide_if(client);
         }
-        self.cands = cands;
+        // history lines on top, as tzc; the selection starts on the first completion
+        self.selected = if cands.is_empty() { 0 } else { recent.len() };
+        self.cands = recent.into_iter().map(|h| Cand { label: h.clone(), insert: h, desc: String::new(), kind: "history".into() }).chain(cands).collect();
         self.word = (start, end);
-        self.selected = 0;
         self.top = 0;
         self.show();
     }
@@ -352,7 +367,7 @@ impl<P: Popup> Host<P> {
                 self.request = None;
                 self.hide_if(client);
             }
-            Msg::Line { session, seq, buffer, cursor, cwd, path, history, cell, grid, .. } => {
+            Msg::Line { session, seq, buffer, cursor, cwd, path, history, recent, cell, grid, .. } => {
                 let active = self.app.pid != 0 && is_ancestor(self.app.pid, session);
                 self.reload();
                 log(&format!("line {buffer:?} cell {cell:?} grid {grid:?} active {active} enabled {}", self.config.enabled));
@@ -361,7 +376,7 @@ impl<P: Popup> Host<P> {
                 if history || !active || !self.config.enabled || buffer.trim().is_empty() {
                     return self.hide_if(client);
                 }
-                let ctx = Ctx { client, session, seq, row: cell.row, col: cell.col, rows: grid.rows, cols: grid.cols, xpx: grid.xpx, ypx: grid.ypx, cursor };
+                let ctx = Ctx { client, session, seq, row: cell.row, col: cell.col, rows: grid.rows, cols: grid.cols, xpx: grid.xpx, ypx: grid.ypx, cursor, recent };
                 self.request = Some((self.latest, ctx));
                 let req = format!("{}\u{1f}{cursor}\u{1f}{cwd}\u{1f}{path}\u{1f}{buffer}\0", self.latest);
                 let _ = self.compcore.write_all(req.as_bytes());
@@ -376,7 +391,10 @@ impl<P: Popup> Host<P> {
                     "down" => self.selected = (self.selected + 1) % n,
                     "accept" => {
                         let Some(c) = &self.ctx else { return };
-                        let m = Msg::Accept { v: 1, session: c.session, seq: c.seq, start: self.word.0, end: self.word.1, text: self.cands[self.selected].insert.clone() };
+                        let cand = &self.cands[self.selected];
+                        // a history line replaces the line up to the word's end, not just the word
+                        let start = if cand.kind == "history" { 0 } else { self.word.0 };
+                        let m = Msg::Accept { v: 1, session: c.session, seq: c.seq, start, end: self.word.1, text: cand.insert.clone() };
                         if let Some(s) = self.clients.get_mut(&client) {
                             reply(s, &m);
                         }
@@ -429,6 +447,7 @@ impl<P: Popup> Host<P> {
                 }
                 self.app = app;
             }
+            Ev::Scroll(n) => self.scroll(n),
             Ev::Quit => return false,
         }
         true

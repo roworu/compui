@@ -9,6 +9,9 @@ if [[ -o interactive ]]; then
     && autoload -Uz add-zle-hook-widget 2>/dev/null; then
     typeset -gi __compui_cfd=-1 __compui_cseq=0
     typeset -g __compui_csent= __compui_cpath= __compui_cpwd= __compui_cpwdjson=
+    typeset -g __compui_hstamp=
+    typeset -ga __compui_hlines
+    zmodload zsh/parameter 2>/dev/null
 
     # each function starts with "emulate -L zsh": user options like ksh_arrays or
     # sh_word_split must not change how they run
@@ -88,6 +91,40 @@ if [[ -o interactive ]]; then
     }
     zle -N __compui_creceive
 
+    # recent history lines, newest first, rebuilt only when the history changes so a key
+    # scans an array; ${#history} is linear on the special parameter, so HISTCMD is the stamp
+    __compui_hrefresh() {
+      emulate -L zsh
+      [[ ${HISTCMD:-0} == $__compui_hstamp ]] && return
+      __compui_hstamp=${HISTCMD:-0}
+      local -a lines
+      local key=$(( ${HISTCMD:-0} - 1 )) scans=0
+      while (( key > 0 && scans < 1000 && $#lines < 500 )); do
+        (( ${+history[$key]} )) && lines+=("${history[$key]}")
+        (( scans++, key-- ))
+      done
+      __compui_hlines=("${lines[@]}")
+    }
+
+    # up to 3 history lines starting with the text before the cursor, as ',"recent":[...]' in REPLY
+    __compui_crecent() {
+      emulate -L zsh
+      local typed=${BUFFER[1,CURSOR]} entry out=
+      local -a seen
+      REPLY=
+      [[ -n ${typed//[[:space:]]/} ]] || return
+      __compui_hrefresh
+      for entry in "${(@M)__compui_hlines:#$typed*}"; do
+        (( $#seen >= 3 )) && break
+        [[ $entry == "$BUFFER" || $entry == *[[:cntrl:]]* ]] && continue
+        (( ${seen[(Ie)$entry]} )) && continue
+        seen+=("$entry")
+        __compui_cjson "$entry"
+        out+=${out:+,}$REPLY
+      done
+      REPLY=${out:+,\"recent\":[$out]}
+    }
+
     __compui_creport() {
       emulate -L zsh
       if (( __compui_cfd < 0 )); then
@@ -117,7 +154,8 @@ if [[ -o interactive ]]; then
         __compui_cjson "$PWD"
         __compui_cpwdjson=$REPLY
       fi
-      __compui_csend "{\"v\":1,\"type\":\"line\",\"seq\":$__compui_cseq,\"cursor\":$CURSOR,\"buffer\":$buffer,\"cwd\":$__compui_cpwdjson$hist}"
+      __compui_crecent
+      __compui_csend "{\"v\":1,\"type\":\"line\",\"seq\":$__compui_cseq,\"cursor\":$CURSOR,\"buffer\":$buffer,\"cwd\":$__compui_cpwdjson$hist$REPLY}"
     }
 
     __compui_cfinish() {

@@ -60,6 +60,15 @@ final class PopupView: NSView {
     var rowH: CGFloat = 16
     var labelW: CGFloat = 0
     override var isFlipped: Bool { true }
+    var scrollRest: CGFloat = 0
+
+    /// wheel or trackpad, in whole rows; trackpad deltas are in points
+    override func scrollWheel(with e: NSEvent) {
+        scrollRest -= e.hasPreciseScrollingDeltas ? e.scrollingDeltaY / max(rowH, 1) : e.scrollingDeltaY
+        let n = Int(scrollRest)
+        scrollRest -= CGFloat(n)
+        if n != 0 { scrollBy(n) }
+    }
 
     /// lays out `cands[top..<top + maxRows]` for a terminal cell of `cell`; returns the popup's size
     func layout(_ cands: [Cand], selected sel: Int, top: Int, cell: CGSize, maxWidth: CGFloat, dark: Bool) -> NSSize {
@@ -74,7 +83,7 @@ final class PopupView: NSView {
         let w = ceil(min(adv * CGFloat(labelCells + descCells) + 2 * pad, maxWidth))
         rowH = round(cell.height)
         labelW = adv * CGFloat(labelCells)
-        rows = shown.map { ($0.label, $0.desc, theme.kinds[$0.kind] ?? theme.text) }
+        rows = shown.map { ($0.label, $0.desc, $0.kind == "history" ? theme.muted : theme.kinds[$0.kind] ?? theme.text) }
         selected = sel >= top && sel < top + shown.count ? sel - top : nil
         detail = sel < cands.count && !cands[sel].desc.isEmpty ? cands[sel].desc : nil
         let detailH = detail.map { detailHeight($0, descFont, w - 2 * pad) + 7 } ?? 0

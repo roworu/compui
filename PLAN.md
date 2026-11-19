@@ -136,7 +136,8 @@ from the shell; `1 accept <seq> <start> <end> <text>` back). see kuterm's
 → {"type":"hello","session":<pty pid>,"shell_pid":…,"tty":"/dev/ttys004"}
 → {"type":"env","session":…,"path":"<PATH>"}
 → {"type":"line","session":…,"seq":7,"buffer":"git ch","cursor":6,"cwd":"/abs",
-   "cell":{"row":12,"col":8},"grid":{"rows":40,"cols":120,"xpx":1440,"ypx":960},"history":false}
+   "cell":{"row":12,"col":8},"grid":{"rows":40,"cols":120,"xpx":1440,"ypx":960},"history":false,
+   "recent":["git checkout main"]}
 → {"type":"key","session":…,"seq":7,"key":"up"|"down"|"accept"|"dismiss"}
 → {"type":"end","session":…}
 ← {"type":"shown","session":…,"seq":7}          popup visible, wrapper starts taking keys
@@ -146,7 +147,9 @@ from the shell; `1 accept <seq> <start> <end> <text>` back). see kuterm's
 
 `cell` is the cursor cell from the parser; the host gets the word's first cell by stepping
 back the display width of `buffer[start..cursor]`, wrapping at `cols`. `xpx/ypx` are the
-pty's pixel size when the terminal reports one (ghostty does), else 0.
+pty's pixel size when the terminal reports one (ghostty does), else 0. `recent` (optional) is up to 3
+history lines starting with `buffer[..cursor]`, newest first, from the zsh adapter (its `line` carries
+it too); the host shows them above the candidates and accepts one with `start` 0.
 
 the wrapper forwards `accept` to zsh as the v1 `accept` line; zsh drops it if `seq` is not the
 line's current one.
@@ -254,7 +257,7 @@ zsh (empty `ZDOTDIR`) under the wrapper.
 
 done:
 
-- `compui-proto`: `hello`, `line` (buffer, cursor, cwd, path, cell, grid), `key`, `shown`, `hidden`,
+- `compui-proto`: `hello`, `line` (buffer, cursor, cwd, path, cell, grid, recent history), `key`, `shown`, `hidden`,
   `accept`, `end`; round-trip test
 - wrapper (`crates/compui/src/pty.rs`): pty pass-through with exit code, size polling, `vt100` cursor cell (seeded with a cursor position query at start), adapter socket
   per session, line sent once the screen settles, popup keys (up, down, tab, esc) taken while shown,
@@ -273,7 +276,7 @@ done:
 - linux (kde plasma wayland), rust host in `crates/compui` with a `Handler` trait: same socket and
   view logic as the swift host, compcore linked; `linux/common` loads a kwin script that reports
   the active window (pid, client rect, output, scale) over d-bus, draws the popup as a gtk4 layer-shell
-  overlay with no keyboard or mouse input; no tray, it runs as a background service. `linux/ghostty`:
+  overlay with no keyboard input, the box takes only the mouse wheel; no tray, it runs as a background service. `linux/ghostty`:
   cell size from `xpx/ypx` (floored per cell), grid left from the client rect plus `window-padding-x`, grid
   top from the client bottom minus `window-padding-y` (no header bar height needed); a grid narrower than
   the window is a split, no popup. `linux/konsole`: the same from the bottom, konsole's pixel size is its
@@ -286,7 +289,9 @@ done:
   one dark / one light colors by the system appearance, rounded box with border and shadow, rows one
   terminal line high, font sized to the cell width, label column in the kind's color, smaller muted
   descriptions, the selected one's whole description under a divider, scrollbar thumb, kuterm's scrolling
-  and its below / above rule
+  and its below / above rule; the mouse wheel scrolls the list (selection kept in view)
+- history: the zsh adapter sends up to 3 recent history lines starting with the text before the cursor,
+  shown above the candidates in the muted color as tzc does; picking one replaces the line up to the word's end
 
 left:
 
@@ -296,7 +301,7 @@ left:
 - phase 5: split check (`cols × rows`)
 - phase 6: multiple screens, spaces, full screen
 - keys: wait up to 400 ms for candidates still being found; word start for wide chars and wrapped lines
-- popup: pick by mouse is off; colors are kuterm's bundled themes, not the terminal's palette or font
+- popup: pick by click is off; colors are kuterm's bundled themes, not the terminal's palette or font
 - permission flow: the prompt shows on start, and the tray status line says when it is missing; no guided setup yet
 - phase 7: `.app`, universal, sign, notarize, launch agent
 - phase 8: gnome-terminal handler, konsole sessions with a non-default profile, gnome (no kwin, no layer-shell), windows; on linux

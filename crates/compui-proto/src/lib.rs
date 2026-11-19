@@ -28,6 +28,9 @@ pub enum Msg {
         cwd: String,
         path: String,
         history: bool,
+        /// recent history lines starting with the text before the cursor, newest first
+        #[serde(default)]
+        recent: Vec<String>,
         cell: Cell,
         grid: Grid,
     },
@@ -46,7 +49,7 @@ mod tests {
 
     #[test]
     fn line_roundtrip() {
-        let m = Msg::Line { v: 1, session: 1, seq: 7, buffer: "git ch".into(), cursor: 6, cwd: "/".into(), path: "/bin".into(), history: false, cell: Cell { row: 12, col: 8 }, grid: Grid { rows: 40, cols: 120, xpx: 0, ypx: 0 } };
+        let m = Msg::Line { v: 1, session: 1, seq: 7, buffer: "git ch".into(), cursor: 6, cwd: "/".into(), path: "/bin".into(), history: false, recent: vec!["git checkout main".into()], cell: Cell { row: 12, col: 8 }, grid: Grid { rows: 40, cols: 120, xpx: 0, ypx: 0 } };
         let s = serde_json::to_string(&m).unwrap();
         assert!(s.starts_with(r#"{"type":"line""#));
         assert_eq!(serde_json::from_str::<Msg>(&s).unwrap(), m);

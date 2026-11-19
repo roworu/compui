@@ -91,7 +91,7 @@ pub fn run(handlers: Vec<Box<dyn Handler>>) {
         eprintln!("compositor without layer-shell, no popup");
     }
     let bridge = kwin(tx.clone()).inspect_err(|e| eprintln!("kwin script not loaded, no popup: {e}"));
-    let mut host = Host::new(Gtk::new(), handlers, tx.clone());
+    let mut host = Host::new(Gtk::new(tx.clone()), handlers, tx.clone());
     host.reload();
     serve(tx.clone());
     {

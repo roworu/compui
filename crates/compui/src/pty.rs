@@ -294,6 +294,7 @@ pub fn run() {
                     cwd: v["cwd"].as_str().unwrap_or_default().into(),
                     path: st.path.clone(),
                     history: v["history"].as_bool().unwrap_or(false),
+                    recent: serde_json::from_value(v["recent"].clone()).unwrap_or_default(),
                     cell: Cell { row, col },
                     grid: Grid { rows: s.rows, cols: s.cols, xpx: s.pixel_width, ypx: s.pixel_height },
                 };

@@ -42,7 +42,7 @@ func reloadConfig() {
 let handlers: [Handler] = [Ghostty(), Terminal(), ITerm2(), Generic()]
 
 struct Cand { let label: String, insert: String, desc: String, kind: String }
-struct Ctx { let fd: Int32, session: Int, seq: Int, cell: [String: Int], grid: [String: Int], cursor: Int }
+struct Ctx { let fd: Int32, session: Int, seq: Int, cell: [String: Int], grid: [String: Int], cursor: Int, recent: [String] }
 
 let popupView = PopupView()
 let panel: NSPanel = {
@@ -50,7 +50,8 @@ let panel: NSPanel = {
     p.level = .popUpMenu
     p.hidesOnDeactivate = false
     p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-    p.ignoresMouseEvents = true
+    // takes the wheel; non-activating, so a click doesn't take focus from the terminal
+    p.ignoresMouseEvents = false
     // the view draws the rounded box, the window shadow follows its shape
     p.backgroundColor = .clear
     p.isOpaque = false
@@ -110,10 +111,12 @@ func onCandidates(_ record: String) {
     log("candidates \(record.split(separator: "\u{1e}").count - 1)")
     guard f.count == 3, let id = Int(f[0]), id == latestId, let c = requests[id], let s = Int(f[1]), let e = Int(f[2]) else { return }
     requests = [:]
-    cands = head.dropFirst().map {
+    let found = head.dropFirst().map {
         let p = $0.split(separator: "\u{1f}", omittingEmptySubsequences: false).map(String.init)
         return Cand(label: p[0], insert: p[1], desc: p.count > 2 ? p[2] : "", kind: p.count > 3 ? p[3] : "")
     }
+    // history lines on top, as tzc; the selection starts on the first completion
+    cands = c.recent.map { Cand(label: $0, insert: $0, desc: "", kind: "history") } + found
     if cands.isEmpty || suppressed.map({ $0.fd == c.fd && $0.start == s }) == true { ctx = c; hide(); return }
     // shortcut: the word's first cell is the cursor cell minus its chars, no wrapping or wide chars
     let col = max((c.cell["col"] ?? 0) - (c.cursor - s), 0)
@@ -121,7 +124,7 @@ func onCandidates(_ record: String) {
           let win = attr(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedWindowAttribute),
           let handler = handlers.first(where: { $0.matches(app.bundleIdentifier ?? "") }),
           let rect = handler.locate(win as! AXUIElement, GridPos(row: c.cell["row"] ?? 0, col: col, rows: c.grid["rows"] ?? 1, cols: c.grid["cols"] ?? 1, xpx: c.grid["xpx"] ?? 0, ypx: c.grid["ypx"] ?? 0)) else { log("no cursor rect: frontmost app, focused window or locate failed"); hide(); return }
-    ctx = c; wordStart = s; wordEnd = e; selected = 0; top = 0
+    ctx = c; wordStart = s; wordEnd = e; selected = found.isEmpty ? 0 : c.recent.count; top = 0
     watch(app.processIdentifier, win as! AXUIElement)
     show(rect)
     if shownFd == nil { shownFd = c.fd; reply(c.fd, ["type": "shown", "session": c.session]) }
@@ -163,7 +166,7 @@ func handle(_ line: Data, _ fd: Int32) {
         log("line \(buffer.debugDescription) cell \(cell) grid \(grid) active \(active) enabled \(enabled)")
         if m["history"] as? Bool == true || !active || !enabled || !AXIsProcessTrusted() || buffer.trimmingCharacters(in: .whitespaces).isEmpty { latestId += 1; if shownFd == fd { hide() }; return }
         latestId += 1
-        requests[latestId] = Ctx(fd: fd, session: session, seq: m["seq"] as? Int ?? 0, cell: cell, grid: grid, cursor: cursor)
+        requests[latestId] = Ctx(fd: fd, session: session, seq: m["seq"] as? Int ?? 0, cell: cell, grid: grid, cursor: cursor, recent: m["recent"] as? [String] ?? [])
         toCompcore.write(Data("\(latestId)\u{1f}\(cursor)\u{1f}\(cwd)\u{1f}\(path)\u{1f}\(buffer)\0".utf8))
     case "key":
         guard shownFd == fd, let c = ctx, !cands.isEmpty else { return }
@@ -171,13 +174,23 @@ func handle(_ line: Data, _ fd: Int32) {
         case "up": selected = (selected + cands.count - 1) % cands.count; scrollToSelected(); show(cursorRect)
         case "down": selected = (selected + 1) % cands.count; scrollToSelected(); show(cursorRect)
         case "accept":
-            reply(fd, ["type": "accept", "session": c.session, "seq": c.seq, "start": wordStart, "end": wordEnd, "text": cands[selected].insert])
+            // a history line replaces the line up to the word's end, not just the word
+            let start = cands[selected].kind == "history" ? 0 : wordStart
+            reply(fd, ["type": "accept", "session": c.session, "seq": c.seq, "start": start, "end": wordEnd, "text": cands[selected].insert])
             suppressed = (fd, wordStart); shownFd = nil; panel.orderOut(nil)
         case "dismiss": suppressed = (fd, wordStart); hide()
         default: break
         }
     default: break
     }
+}
+
+/// moves the list by `n` rows with the wheel, the selection kept in view
+func scrollBy(_ n: Int) {
+    guard shownFd != nil, cands.count > maxRows else { return }
+    top = max(0, min(top + n, cands.count - maxRows))
+    selected = max(top, min(selected, top + maxRows - 1))
+    show(cursorRect)
 }
 
 /// scrolls only as far as needed to keep the selection in view, as kuterm does

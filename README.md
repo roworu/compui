@@ -1,6 +1,6 @@
 # compUI
 
-Fig-style completion popup for terminals you already use (ghostty, konsole, Terminal.app, iTerm2). Type a command, pick a candidate with up/down, tab to insert. zsh only.
+Fig-style completion popup for terminals you already use (ghostty, konsole, Terminal.app, iTerm2). Type a command, pick a candidate with up/down (or scroll with the mouse wheel), tab to insert. Recent history lines that start with what you typed are listed first. zsh only.
 
 ## Install
 
