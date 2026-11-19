@@ -507,6 +507,8 @@ mod tests {
         assert_eq!(Config::parse("# x\nenabled = false # off\ndebug=true\n"), Config { enabled: false, debug: true });
     }
 
+    // reads /proc
+    #[cfg(target_os = "linux")]
     #[test]
     fn ancestors() {
         assert!(is_ancestor(std::process::id(), std::process::id()));
