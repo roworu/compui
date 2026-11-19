@@ -270,12 +270,17 @@ done:
 - linux (kde plasma wayland), rust host in `crates/compui-host` with a `Handler` trait: same socket and
   view logic as the swift host, `compcore serve` as a child; `linux/common` loads a kwin script that reports
   the active window (pid, client rect, output, scale) over d-bus, draws the popup as a gtk4 layer-shell
-  overlay with no keyboard or mouse input, and puts a ksni tray up (status, enable, quit). `linux/ghostty`:
+  overlay with no keyboard or mouse input; no tray, it runs as a background service. `linux/ghostty`:
   cell size from `xpx/ypx` (floored per cell), grid left from the client rect plus `window-padding-x`, grid
   top from the client bottom minus `window-padding-y` (no header bar height needed); a grid narrower than
   the window is a split, no popup. `linux/konsole`: the same from the bottom, konsole's pixel size is its
   text area in logical px; insets from the default profile (`TerminalMargin`, `HighlightScrolledLines`,
   `ScrollBarPosition`)
+- linux install: `./install.sh` builds and copies `dist/` to `~/.local/lib/compui`, links `compui-pty` into
+  `~/.local/bin`, runs the host as the systemd user service `compui.service` (with the graphical
+  session), removes older installs (xdg autostart, tray icon, stale sockets); `--uninstall` undoes it.
+  this replaces the tray on linux: one config file `~/.config/compui/config` (`enabled`, `debug`),
+  reread when it changes; status and logs through `systemctl --user status compui` and the journal
 - popup drawn like kuterm's on both oses (`macos/common/popup.swift`, `linux/common/popup.rs`): kuterm's
   one dark / one light colors by the system appearance, rounded box with border and shadow, rows one
   terminal line high, font sized to the cell width, label column in the kind's color, smaller muted
@@ -293,8 +298,8 @@ left:
 - popup: pick by mouse is off; colors are kuterm's bundled themes, not the terminal's palette or font
 - permission flow: the prompt shows on start, and the tray status line says when it is missing; no guided setup yet
 - phase 7: `.app`, universal, sign, notarize, launch agent
-- phase 8: gnome-terminal handler, konsole sessions with a non-default profile, gnome (no kwin, no layer-shell), windows; on linux the
-  `Tray` trait, `window-padding-balance`, splits stacked vertically and a bottom tab bar in ghostty
+- phase 8: gnome-terminal handler, konsole sessions with a non-default profile, gnome (no kwin, no layer-shell), windows; on linux
+  `window-padding-balance`, splits stacked vertically and a bottom tab bar in ghostty
 - tests: pty byte-for-byte comparison against no wrapper, placement math, ax fixtures (key filter has a unit test)
 - tzc (and any plugin that draws its own menu) has to be off under compUI, `[[ -z $COMPUI_SOCKET ]] && source …`
 

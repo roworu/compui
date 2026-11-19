@@ -1,11 +1,11 @@
-//! linux side of compui-host: a layer-shell popup (gtk4, `popup.rs`), a StatusNotifierItem tray (ksni) and a kwin
-//! script that reports the active window over d-bus. kde plasma (wayland) only for now
+//! linux side of compui-host, a background service (systemd user unit, see install.sh): a layer-shell
+//! popup (gtk4, `popup.rs`) and a kwin script that reports the active window over d-bus. kde plasma
+//! (wayland) only for now
 #[path = "popup.rs"]
 mod popup;
 
-use crate::{App, Ev, Grid, Handler, Host, Rect, log, serve};
+use crate::{App, Ev, Grid, Handler, Host, Rect, serve};
 use gtk4::{self as gtk, glib};
-use ksni::blocking::TrayMethods;
 use popup::Gtk;
 use std::{env, fs};
 use zbus::blocking::Connection;
@@ -74,51 +74,7 @@ fn kwin(tx: async_channel::Sender<Ev>) -> zbus::Result<Connection> {
     Ok(conn)
 }
 
-struct Tray {
-    tx: async_channel::Sender<Ev>,
-    enabled: bool,
-    /// why the popup can't work, if it can't
-    problem: Option<String>,
-}
-
-impl ksni::Tray for Tray {
-    fn id(&self) -> String {
-        "compui".into()
-    }
-    fn title(&self) -> String {
-        "compUI".into()
-    }
-    fn icon_name(&self) -> String {
-        "input-keyboard".into()
-    }
-    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        use ksni::menu::*;
-        let status = self.problem.clone().unwrap_or_else(|| if self.enabled { "running" } else { "popup off" }.into());
-        vec![
-            StandardItem { label: status, enabled: false, ..Default::default() }.into(),
-            CheckmarkItem {
-                label: "Popup enabled".into(),
-                checked: self.enabled,
-                activate: Box::new(|t: &mut Self| {
-                    t.enabled = !t.enabled;
-                    let _ = t.tx.send_blocking(Ev::Toggle);
-                }),
-                ..Default::default()
-            }
-            .into(),
-            StandardItem {
-                label: "Quit".into(),
-                activate: Box::new(|t: &mut Self| {
-                    let _ = t.tx.send_blocking(Ev::Quit);
-                }),
-                ..Default::default()
-            }
-            .into(),
-        ]
-    }
-}
-
-/// runs the host until quit from the tray or a signal
+/// runs the host until sigterm or sigint
 pub fn run(handlers: Vec<Box<dyn Handler>>) {
     // blocked before any thread starts so only the sigwait thread below gets them
     let mut sigs: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -130,16 +86,13 @@ pub fn run(handlers: Vec<Box<dyn Handler>>) {
     }
     gtk::init().expect("gtk needs a wayland display");
     let (tx, rx) = async_channel::unbounded();
-    let mut problem = None;
+    // without these the popup can't show; said always, so `systemctl --user status compui` tells why
     if !gtk4_layer_shell::is_supported() {
-        problem = Some("compositor without layer-shell".into());
+        eprintln!("compositor without layer-shell, no popup");
     }
-    let bridge = kwin(tx.clone()).inspect_err(|e| {
-        log(&format!("kwin script: {e}"));
-        problem.get_or_insert_with(|| "kwin script not loaded".into());
-    });
-    let tray = Tray { tx: tx.clone(), enabled: true, problem }.spawn().inspect_err(|e| log(&format!("tray: {e}")));
+    let bridge = kwin(tx.clone()).inspect_err(|e| eprintln!("kwin script not loaded, no popup: {e}"));
     let mut host = Host::new(Gtk::new(), handlers, tx.clone());
+    host.reload();
     serve(tx.clone());
     {
         let tx = tx.clone();
@@ -163,5 +116,4 @@ pub fn run(handlers: Vec<Box<dyn Handler>>) {
     if let Ok(c) = &bridge {
         let _ = kwin_call(c, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", &("compui"));
     }
-    drop(tray);
 }

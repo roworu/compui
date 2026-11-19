@@ -9,6 +9,7 @@ compUI: a fig-style completion popup for macOS terminals it doesn't own (ghostty
 ## Commands
 
 - `./build.sh` — builds `dist/` (`compui-pty`, `compcore` from the pinned tag via `cargo install`, `compui-host` via `swiftc`, the `compui` launcher, `shell/zsh`). Needs cargo and swiftc.
+- `./install.sh` — Linux only: builds, installs `dist/` into `~/.local/lib/compui` (`compui-pty` linked into `~/.local/bin`), runs the host as the systemd user service `compui.service`, writes `~/.config/compui/config` (`enabled`, `debug`; reread on change) if missing, and removes older installs. `--uninstall` removes it (config kept). Logs: `journalctl --user -u compui -f`. Note `./test.sh` kills the service's host to start its own debug one; `systemctl --user start compui` after.
 - `./test.sh` — builds, then starts the wrapper in a pure zsh (temp empty `ZDOTDIR`) with host debug logging. Interactive and manual: type `git ch`. Host log: `/tmp/compui-host.log`.
 - `cargo test` — only `compui-proto` has tests (message round-trip). Single test: `cargo test -p compui-proto <name>`.
 - The popup needs the macOS accessibility permission and a real terminal; there are no automated UI tests.
@@ -40,4 +41,4 @@ terminal ⇄ compui-pty ⇄ zsh (shell/zsh/compui.zsh)
 
 ## Known divergences from PLAN.md
 
-On macOS the host is Swift rather than the planned Rust `compui-host`; on Linux (KDE Wayland) it is Rust (`crates/compui-host`, which pulls in `linux/common/main.rs`, `linux/ghostty/main.rs` and `linux/konsole/main.rs` via `#[path]`, popup via gtk4-layer-shell drawn with cairo/pango in `linux/common/popup.rs` (the Swift twin is `macos/common/popup.swift`, keep their look in sync), window position from a KWin script over D-Bus, `compcore serve` as a child instead of linked). The pty uses `vt100` rather than `alacritty_terminal`. The Rust `Handler` trait exists; the `Tray` trait doesn't. Cargo workspace edition is 2024.
+On macOS the host is Swift rather than the planned Rust `compui-host`; on Linux (KDE Wayland) it is Rust (`crates/compui-host`, which pulls in `linux/common/main.rs`, `linux/ghostty/main.rs` and `linux/konsole/main.rs` via `#[path]`, popup via gtk4-layer-shell drawn with cairo/pango in `linux/common/popup.rs` (the Swift twin is `macos/common/popup.swift`, keep their look in sync), window position from a KWin script over D-Bus, `compcore serve` as a child instead of linked). The pty uses `vt100` rather than `alacritty_terminal`. The Rust `Handler` trait exists; on Linux there is no tray (the plan's `Tray` trait), the host is a background service configured by one file. Cargo workspace edition is 2024.

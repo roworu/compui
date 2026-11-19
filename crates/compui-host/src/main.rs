@@ -18,12 +18,50 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 use std::{env, fs, thread};
 
-/// prints to stderr when COMPUI_DEBUG is set
+/// `debug` from the config, or COMPUI_DEBUG set
+static DEBUG: AtomicBool = AtomicBool::new(false);
+
+/// prints to stderr (the journal under systemd) when debug is on
 pub fn log(m: &str) {
-    if env::var_os("COMPUI_DEBUG").is_some() {
+    if DEBUG.load(Ordering::Relaxed) || env::var_os("COMPUI_DEBUG").is_some() {
         eprintln!("{m}");
+    }
+}
+
+/// `~/.config/compui/config`: `key = value` lines, `#` comments
+#[derive(Debug, PartialEq)]
+pub struct Config {
+    /// show the popup at all
+    pub enabled: bool,
+    /// log every line, window and placement
+    pub debug: bool,
+}
+
+impl Config {
+    /// parses the config text, defaults for what is missing or unreadable
+    pub fn parse(text: &str) -> Self {
+        let mut c = Config { enabled: true, debug: false };
+        for line in text.lines() {
+            let Some((k, v)) = line.split_once('=') else { continue };
+            let v = v.split('#').next().unwrap_or_default().trim();
+            let on = matches!(v, "true" | "yes" | "on" | "1");
+            match k.trim() {
+                "enabled" => c.enabled = on,
+                "debug" => c.debug = on,
+                _ => {}
+            }
+        }
+        c
+    }
+
+    pub fn path() -> PathBuf {
+        let home = PathBuf::from(env::var_os("HOME").unwrap_or_default());
+        env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("compui/config")
     }
 }
 
@@ -83,7 +121,6 @@ pub enum Ev {
     Cands(String),
     /// the active window changed, moved or resized
     Window(App),
-    Toggle,
     Quit,
 }
 
@@ -113,7 +150,9 @@ struct Ctx {
 pub struct Host<P: Popup> {
     pub popup: P,
     pub handlers: Vec<Box<dyn Handler>>,
-    pub enabled: bool,
+    config: Config,
+    /// mtime of the config file when it was read, to reread it when it changes
+    config_mtime: Option<SystemTime>,
     clients: HashMap<u64, UnixStream>,
     compcore: ChildStdin,
     _child: Child,
@@ -201,7 +240,8 @@ impl<P: Popup> Host<P> {
         Host {
             popup,
             handlers,
-            enabled: true,
+            config: Config::parse(""),
+            config_mtime: None,
             clients: HashMap::new(),
             compcore: child.stdin.take().unwrap(),
             _child: child,
@@ -215,6 +255,22 @@ impl<P: Popup> Host<P> {
             shown: None,
             latest: 0,
             request: None,
+        }
+    }
+
+    /// rereads the config when its file changed, so edits apply on the next keystroke without a restart
+    pub fn reload(&mut self) {
+        let path = Config::path();
+        let mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if mtime == self.config_mtime && mtime.is_some() {
+            return;
+        }
+        self.config_mtime = mtime;
+        let c = Config::parse(&fs::read_to_string(&path).unwrap_or_default());
+        DEBUG.store(c.debug, Ordering::Relaxed);
+        if c != self.config {
+            eprintln!("config {}: {c:?}", path.display());
+            self.config = c;
         }
     }
 
@@ -279,10 +335,11 @@ impl<P: Popup> Host<P> {
             }
             Msg::Line { session, seq, buffer, cursor, cwd, path, history, cell, grid, .. } => {
                 let active = self.app.pid != 0 && is_ancestor(self.app.pid, session);
-                log(&format!("line {buffer:?} cell {cell:?} grid {grid:?} active {active} enabled {}", self.enabled));
+                self.reload();
+                log(&format!("line {buffer:?} cell {cell:?} grid {grid:?} active {active} enabled {}", self.config.enabled));
                 self.latest += 1;
                 self.request = None;
-                if history || !active || !self.enabled || buffer.trim().is_empty() {
+                if history || !active || !self.config.enabled || buffer.trim().is_empty() {
                     return self.hide_if(client);
                 }
                 let ctx = Ctx { client, session, seq, row: cell.row, col: cell.col, rows: grid.rows, cols: grid.cols, xpx: grid.xpx, ypx: grid.ypx, cursor };
@@ -343,12 +400,6 @@ impl<P: Popup> Host<P> {
                 }
                 self.app = app;
             }
-            Ev::Toggle => {
-                self.enabled = !self.enabled;
-                if !self.enabled {
-                    self.hide();
-                }
-            }
             Ev::Quit => return false,
         }
         true
@@ -400,6 +451,12 @@ mod tests {
         assert_eq!((id, s, e, c.len()), (7, 4, 6, 2));
         assert_eq!((c[0].desc.as_str(), c[0].kind.as_str(), c[1].kind.as_str()), ("switch branches", "subcommand", ""));
         assert!(parse_reply("7\u{1f}4").is_none());
+    }
+
+    #[test]
+    fn config_parses() {
+        assert_eq!(Config::parse(""), Config { enabled: true, debug: false });
+        assert_eq!(Config::parse("# x\nenabled = false # off\ndebug=true\n"), Config { enabled: false, debug: true });
     }
 
     #[test]
