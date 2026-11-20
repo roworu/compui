@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-compUI: a fig-style completion popup for terminals it doesn't own, on macOS and Linux (KDE or GNOME, Wayland). Candidates come from [compcore](https://github.com/roworu/compcore) (pinned tag v0.1.3); compUI finds the cursor on screen, shows a native popup and puts the picked candidate into the shell line.
+compUI: a fig-style completion popup for terminals it doesn't own, on macOS and Linux (KDE or GNOME, Wayland). Candidates come from [compcore](https://github.com/roworu/compcore) (pinned tag v0.1.4); compUI finds the cursor on screen, shows a native popup and puts the picked candidate into the shell line.
 
 ## Commands
 
