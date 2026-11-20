@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-compUI: a fig-style completion popup for macOS terminals it doesn't own (ghostty first). Candidates come from [compcore](https://github.com/roworu/compcore) (pinned tag v0.1.3); compUI finds the cursor on screen, shows a native popup and puts the picked candidate into the shell line. `PLAN.md` is the design doc (target layout, protocols, phases) and its `status` section says what the current poc actually does versus the plan. Read it before structural changes.
+compUI: a fig-style completion popup for terminals it doesn't own, on macOS and Linux (KDE Wayland). Candidates come from [compcore](https://github.com/roworu/compcore) (pinned tag v0.1.3); compUI finds the cursor on screen, shows a native popup and puts the picked candidate into the shell line.
 
 ## Commands
 
@@ -40,6 +40,24 @@ terminal ⇄ compui (wrapper) ⇄ zsh (shell/zsh/compui.zsh)
 - `crates/compui-proto`: serde messages pty ⇄ host as JSON lines (`hello`, `line`, `key`, `shown`, `hidden`, `accept`, `end`), `"v":1`. The Swift host reimplements this by hand, so change both sides together.
 - `macos/common/`: the Swift host (`main.swift`: sockets, compcore, tray, `NSPanel`) and the accessibility helpers plus the `Handler` protocol (`ax.swift`). Per-terminal placement lives in `macos/ghostty/` (padding read from its config, default 2), `macos/terminal/`, `macos/iterm2/`, `macos/alacritty/` (title bar, padding and dynamic padding from its toml) and `macos/generic/` (fallback); `handlers` in `main.swift` picks the first whose `matches` the frontmost bundle id. `build.rs` compiles them with `swiftc` into a static library; `compui host` calls its `compui_host_main` after taking the host lock. Like on Linux it reads the config file and exits 30s after the last wrapper; it also has a tray.
 
-## Known divergences from PLAN.md
+## Hosts
 
-On macOS the host is Swift (linked into `compui`) rather than the planned Rust `compui-host`; on Linux (KDE Wayland) it is Rust (`crates/compui/src/main.rs`, which pulls in `linux/common/main.rs`, `linux/ghostty/main.rs`, `linux/konsole/main.rs` and `linux/alacritty/main.rs` via `#[path]`, popup via gtk4-layer-shell drawn with cairo/pango in `linux/common/popup.rs` (the Swift twin is `macos/common/popup.swift`, keep their look in sync), window position from a KWin script over D-Bus, compcore linked). The pty uses `vt100` rather than `alacritty_terminal`. The Rust `Handler` trait exists; on Linux there is no tray (the plan's `Tray` trait), the host is started on demand by the wrapper and configured by one file. Cargo workspace edition is 2024.
+On macOS the host is Swift (linked into `compui`); on Linux (KDE Wayland) it is Rust (`crates/compui/src/main.rs`, which pulls in `linux/common/main.rs`, `linux/ghostty/main.rs`, `linux/konsole/main.rs` and `linux/alacritty/main.rs` via `#[path]`, popup via gtk4-layer-shell drawn with cairo/pango in `linux/common/popup.rs` (the Swift twin is `macos/common/popup.swift`, keep their look in sync), window position from a KWin script over D-Bus, compcore linked). The pty uses `vt100`. On Linux there is no tray; the host is started on demand by the wrapper and configured by one file. Cargo workspace edition is 2024.
+
+## Editor terminals (Zed, VS Code): not supported yet
+
+Checked on KDE Wayland. The wrapper and completions work inside both, but the host can't place the popup: KWin reports the whole editor window, and the terminal is one panel inside it at an unknown spot.
+
+- Zed (`zed-editor`): the pty pixel size is exact (cols × floor(cell width), rows × line height). The grid starts one cell (a gutter) in from the pane's left edge; leftover space goes right, and to the bottom unless the output fills the screen (then to the top). Dock visibility is saved in `~/.local/share/zed/db/0-stable/db.sqlite` (`workspaces`), dock sizes are not. Zed doesn't join AT-SPI even with `org.a11y.Status IsEnabled` on. Only a geometry guess is left (say the right dock, with title/tab/status bar heights from `ui_font_size`), which can be off by a row.
+- VS Code (`code-oss`): the pixel size is in CSS px before zoom (8.33×20.8 reported vs 12×30 on screen at zoom ×1.44). It does join AT-SPI when `IsEnabled` is on; still to check whether terminal rows are exposed with `editor.accessibilitySupport: "on"`. On Wayland AT-SPI extents are window-relative only, so they'd be combined with KWin's window rect.
+
+## Not done yet
+
+- host: keep Swift on macOS or move it to Rust like Linux; pty on `alacritty_terminal` instead of `vt100`
+- macOS: `macos/iterm2` and `macos/alacritty` untested; multiple screens, spaces, full screen; `.app`, universal, sign, notarize, launch agent; guided accessibility permission setup (now only the prompt on start and the tray status line)
+- Linux: gnome (no kwin, no layer-shell), gnome-terminal, konsole sessions with a non-default profile; ghostty's `window-padding-balance`, splits stacked vertically and a bottom tab bar
+- keys: wait up to 400 ms for candidates still being found; word start for wide chars and wrapped lines
+- popup: pick by click is off; colors are kuterm's bundled themes, not the terminal's palette or font
+- tests: pty byte-for-byte against no wrapper, ax fixtures
+- tzc (and any plugin that draws its own menu) has to be off under compUI: `[[ -z $COMPUI_SOCKET ]] && source …`
+- Windows
