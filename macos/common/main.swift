@@ -39,7 +39,7 @@ func reloadConfig() {
     if !on { hide() }
 }
 
-let handlers: [Handler] = [Ghostty(), Terminal(), ITerm2(), Generic()]
+let handlers: [Handler] = [Ghostty(), Terminal(), ITerm2(), Alacritty(), Generic()]
 
 struct Cand { let label: String, insert: String, desc: String, kind: String }
 struct Ctx { let fd: Int32, session: Int, seq: Int, cell: [String: Int], grid: [String: Int], cursor: Int, recent: [String] }

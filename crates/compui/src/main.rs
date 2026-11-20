@@ -12,6 +12,9 @@ mod pty;
 #[path = "../../../linux/common/main.rs"]
 mod common;
 #[cfg(target_os = "linux")]
+#[path = "../../../linux/alacritty/main.rs"]
+mod alacritty;
+#[cfg(target_os = "linux")]
 #[path = "../../../linux/ghostty/main.rs"]
 mod ghostty;
 #[cfg(target_os = "linux")]
@@ -498,7 +501,7 @@ fn host() {
         return;
     }
     #[cfg(target_os = "linux")]
-    common::run(vec![Box::new(ghostty::Ghostty::default()), Box::new(konsole::Konsole::default())]);
+    common::run(vec![Box::new(ghostty::Ghostty::default()), Box::new(konsole::Konsole::default()), Box::new(alacritty::Alacritty::default())]);
     #[cfg(target_os = "macos")]
     unsafe { compui_host_main() };
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]

@@ -281,7 +281,10 @@ done:
   top from the client bottom minus `window-padding-y` (no header bar height needed); a grid narrower than
   the window is a split, no popup. `linux/konsole`: the same from the bottom, konsole's pixel size is its
   text area in logical px; insets from the default profile (`TerminalMargin`, `HighlightScrolledLines`,
-  `ScrollBarPosition`)
+  `ScrollBarPosition`). `linux/alacritty`: its pixel size is the grid alone in device px, grid top-left
+  from the client rect plus `window.padding` (scaled, floored, plus half the leftover with `dynamic_padding`)
+- `macos/alacritty`: the same from the ax window frame below the title bar (none with `decorations` other
+  than full); untested
 - install: `install.sh` downloads the release tarball for the os/arch into `~/.local/bin`, no service;
   a `v*` tag builds the tarballs (`.github/workflows/release.yml`). one config file `~/.config/compui/config`
   (`enabled`, `debug`), reread when it changes, replaces the tray on linux; log in `$XDG_RUNTIME_DIR/compui/host.log`
