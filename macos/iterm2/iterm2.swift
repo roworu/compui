@@ -2,6 +2,7 @@ import Cocoa
 
 /// iterm2: the focused element is the text area of the focused session, so splits are told apart
 struct ITerm2: Handler {
+    let name = "iterm2"
     func matches(_ bundleId: String) -> Bool { bundleId == "com.googlecode.iterm2" }
     func locate(_ win: AXUIElement, _ g: GridPos) -> CGRect? {
         var pid: pid_t = 0

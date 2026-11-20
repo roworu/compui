@@ -1,12 +1,13 @@
 //! the popup as a gtk4 layer-shell overlay, drawn like kuterm's: kuterm's one dark / one light colors,
 //! rows one terminal line high, label column in the kind's color, smaller muted descriptions, the
 //! selected one's whole description under a divider, a scrollbar thumb when the list is longer
-use crate::{App, Cand, Ev, Popup, ROWS, Rect, log};
+use crate::{App, Cand, Config, Ev, Popup, ROWS, Rect, log};
 use gtk4::{self as gtk, cairo, gdk, glib, pango, prelude::*};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::{cell::RefCell, rc::Rc};
 use zbus::blocking::Connection;
 
+#[derive(Clone, Copy, Default)]
 pub struct Theme {
     bg: u32,
     border: u32,
@@ -34,11 +35,34 @@ impl Theme {
             _ => self.text,
         }
     }
+
+    /// kuterm's dark or light theme with the config's `dark.<name>` / `light.<name>` colors over it
+    fn new(dark: bool, cfg: &Config) -> Self {
+        let mut t = if dark { DARK } else { LIGHT };
+        let prefix = if dark { "dark." } else { "light." };
+        for (k, v) in &cfg.colors {
+            let slot = match k.strip_prefix(prefix) {
+                Some("bg") => &mut t.bg,
+                Some("border") => &mut t.border,
+                Some("selected") => &mut t.selected,
+                Some("text") => &mut t.text,
+                Some("muted") => &mut t.muted,
+                Some("scrollbar") => &mut t.scrollbar,
+                Some("subcommand") => &mut t.kinds[0],
+                Some("suggestion") => &mut t.kinds[1],
+                Some("option") => &mut t.kinds[2],
+                Some("command") => &mut t.kinds[3],
+                Some("folder") => &mut t.kinds[4],
+                _ => continue,
+            };
+            *slot = *v;
+        }
+        t
+    }
 }
 
-// widest label and description, in cells, longer ones end in an ellipsis
+// widest label column, in cells; longer labels and descriptions end in an ellipsis
 const MAX_LABEL_CELLS: usize = 40;
-const MAX_DESCRIPTION_CELLS: usize = 32;
 const DESCRIPTION_SCALE: f64 = 0.85;
 const MAX_DETAIL_LINES: i32 = 3;
 const PAD: f64 = 6.0;
@@ -51,6 +75,7 @@ pub const SHADOW: (f64, f64, f64, f64) = (14.0, 6.0, 14.0, 26.0); // left, top, 
 #[derive(Default)]
 pub struct View {
     dark: bool,
+    theme: Theme,
     /// label, description, label color
     rows: Vec<(String, String, u32)>,
     selected: Option<usize>,
@@ -107,7 +132,7 @@ fn size(l: &pango::Layout) -> (f64, f64) {
 }
 
 pub fn draw(v: &View, cr: &cairo::Context) {
-    let t = if v.dark { &DARK } else { &LIGHT };
+    let t = &v.theme;
     let (w, h) = (v.w, v.h);
     // soft shadow, roughly a large drop shadow: stacked translucent rounded rects
     for i in 0..10 {
@@ -219,8 +244,9 @@ pub fn dark(bus: Option<&Connection>) -> bool {
 }
 
 /// lays out `cands[top..top + ROWS]` for `cell` on the monitor rect `mon`: the view and the box's top-left
-pub fn arrange(ctx: &pango::Context, mon: Rect, dark: bool, cell: Rect, cands: &[Cand], selected: usize, top: usize) -> (View, f64, f64) {
-    let t = if dark { &DARK } else { &LIGHT };
+#[allow(clippy::too_many_arguments)]
+pub fn arrange(ctx: &pango::Context, mon: Rect, dark: bool, cfg: &Config, cell: Rect, cands: &[Cand], selected: usize, top: usize) -> (View, f64, f64) {
+    let t = Theme::new(dark, cfg);
     // the font is sized so a char is as wide as the terminal's cell
     let probe = |px: f64| size(&layout(ctx, "MMMMMMMMMM", px, 1e4, None)).0 / 10.0;
     let font = (cell.w / 0.6).clamp(6.0, 72.0);
@@ -228,9 +254,9 @@ pub fn arrange(ctx: &pango::Context, mon: Rect, dark: bool, cell: Rect, cands: &
     let adv = probe(font);
     let shown = &cands[top.min(cands.len())..cands.len().min(top + ROWS)];
     let cells = |s: &str, max: usize| s.chars().count().min(max);
-    let label_cells = shown.iter().map(|c| cells(&c.label, MAX_LABEL_CELLS)).max().unwrap_or(0).max(12);
-    let desc_cells = shown.iter().filter(|c| !c.desc.is_empty()).map(|c| cells(&c.desc, MAX_DESCRIPTION_CELLS)).max().map_or(0, |n| n + 2);
-    let w = (adv * (label_cells + desc_cells) as f64 + 2.0 * PAD).min(mon.w - 8.0).ceil();
+    // fixed width, so the popup doesn't jump while typing; the label column is cut to fit
+    let label_cells = shown.iter().map(|c| cells(&c.label, MAX_LABEL_CELLS)).max().unwrap_or(0).max(12).min(cfg.width);
+    let w = (adv * cfg.width as f64 + 2.0 * PAD).min(mon.w - 8.0).ceil();
     let row_h = cell.h.round();
     let detail = cands.get(selected).map(|c| c.desc.clone()).filter(|d| !d.is_empty());
     let detail_h = detail.as_ref().map_or(0.0, |d| size(&layout(ctx, d, font * DESCRIPTION_SCALE, w - 2.0 * PAD, Some(MAX_DETAIL_LINES))).1 + 7.0);
@@ -242,6 +268,7 @@ pub fn arrange(ctx: &pango::Context, mon: Rect, dark: bool, cell: Rect, cands: &
     });
     let view = View {
         dark,
+        theme: t,
         rows: shown.iter().map(|c| (c.label.clone(), c.desc.clone(), t.kind(&c.kind))).collect(),
         selected: selected.checked_sub(top).filter(|i| *i < shown.len()),
         detail,
@@ -260,12 +287,12 @@ pub fn arrange(ctx: &pango::Context, mon: Rect, dark: bool, cell: Rect, cands: &
 }
 
 impl Popup for Gtk {
-    fn show(&mut self, app: &App, cell: Rect, cands: &[Cand], selected: usize, top: usize) {
+    fn show(&mut self, app: &App, cfg: &Config, cell: Rect, cands: &[Cand], selected: usize, top: usize) {
         let Some(mon) = self.monitor(&app.output) else { return };
         let g = mon.geometry();
         let dark = if self.win.is_visible() { self.view.borrow().dark } else { dark(self.bus.as_ref()) };
         let mon_rect = Rect { x: g.x() as f64, y: g.y() as f64, w: g.width() as f64, h: g.height() as f64 };
-        let (view, x, y) = arrange(&self.area.pango_context(), mon_rect, dark, cell, cands, selected, top);
+        let (view, x, y) = arrange(&self.area.pango_context(), mon_rect, dark, cfg, cell, cands, selected, top);
         let (w, h) = (view.w, view.h);
         *self.view.borrow_mut() = view;
         let (mx, my) = (mon_rect.x, mon_rect.y);

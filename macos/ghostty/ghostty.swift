@@ -17,6 +17,7 @@ let ghosttyPadding: (x: CGFloat, y: CGFloat) = {
 
 /// ghostty: exact if its surface ever exposes it, else the surface's ax frame plus the padding
 struct Ghostty: Handler {
+    let name = "ghostty"
     func matches(_ bundleId: String) -> Bool { bundleId == "com.mitchellh.ghostty" }
     func locate(_ win: AXUIElement, _ g: GridPos) -> CGRect? {
         let ta = firstTextArea(win)

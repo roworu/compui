@@ -40,6 +40,8 @@ struct GridPos { let row: Int, col: Int, rows: Int, cols: Int, xpx: Int, ypx: In
 
 /// a terminal app the popup can be placed over
 protocol Handler {
+    /// for `terminal.<name> = off` in the config
+    var name: String { get }
     /// true when this handler knows the app
     func matches(_ bundleId: String) -> Bool
     /// cursor cell rect in ax coordinates (points, top-left origin), or nil

@@ -3,7 +3,7 @@
 // divider, a scrollbar thumb when the list is longer
 import Cocoa
 
-struct Theme { let bg, border, selected, text, muted, scrollbar: NSColor; let kinds: [String: NSColor] }
+struct Theme { var bg, border, selected, text, muted, scrollbar: NSColor; var kinds: [String: NSColor] }
 
 func hex(_ v: UInt32) -> NSColor {
     NSColor(srgbRed: CGFloat((v >> 16) & 0xff) / 255, green: CGFloat((v >> 8) & 0xff) / 255, blue: CGFloat(v & 0xff) / 255, alpha: 1)
@@ -15,9 +15,29 @@ let darkTheme = Theme(bg: hex(0x2f343e), border: hex(0x464b57), selected: hex(0x
 let lightTheme = Theme(bg: hex(0xebebec), border: hex(0xc9c9ca), selected: hex(0xfafafa), text: hex(0x383a42), muted: hex(0x6a6b70), scrollbar: hex(0xc4c4c7),
                        kinds: ["subcommand": hex(0xa626a4), "suggestion": hex(0x0997b3), "option": hex(0xc18401), "command": hex(0x50a14f), "folder": hex(0x0184bc)])
 
+/// kuterm's dark or light theme with the config's `dark.<name>` / `light.<name>` colors over it
+func configTheme(dark: Bool) -> Theme {
+    var t = dark ? darkTheme : lightTheme
+    let prefix = dark ? "dark." : "light."
+    for (k, v) in configColors where k.hasPrefix(prefix) {
+        let c = hex(v)
+        switch k.dropFirst(prefix.count) {
+        case "bg": t.bg = c
+        case "border": t.border = c
+        case "selected": t.selected = c
+        case "text": t.text = c
+        case "muted": t.muted = c
+        case "scrollbar": t.scrollbar = c
+        case let kind where t.kinds[String(kind)] != nil: t.kinds[String(kind)] = c
+        default: break
+        }
+    }
+    return t
+}
+
 let maxRows = 8
-// widest label and description, in cells, longer ones end in an ellipsis
-let maxLabelCells = 40, maxDescCells = 32
+// widest label column, in cells; longer labels and descriptions end in an ellipsis
+let maxLabelCells = 40
 let descScale: CGFloat = 0.85
 let maxDetailLines: CGFloat = 3
 let pad: CGFloat = 6, radius: CGFloat = 6
@@ -72,15 +92,15 @@ final class PopupView: NSView {
 
     /// lays out `cands[top..<top + maxRows]` for a terminal cell of `cell`; returns the popup's size
     func layout(_ cands: [Cand], selected sel: Int, top: Int, cell: CGSize, maxWidth: CGFloat, dark: Bool) -> NSSize {
-        theme = dark ? darkTheme : lightTheme
+        theme = configTheme(dark: dark)
         // the font is sized so a char is as wide as the terminal's cell
         let base = termFont(max(cell.width / 0.6, 6))
         font = termFont(base.pointSize * cell.width / max(advance(base), 1))
         let adv = advance(font)
         let shown = Array(cands[min(top, cands.count)..<min(top + maxRows, cands.count)])
-        let labelCells = max(shown.map { min($0.label.count, maxLabelCells) }.max() ?? 0, 12)
-        let descCells = shown.filter { !$0.desc.isEmpty }.map { min($0.desc.count, maxDescCells) }.max().map { $0 + 2 } ?? 0
-        let w = ceil(min(adv * CGFloat(labelCells + descCells) + 2 * pad, maxWidth))
+        // fixed width, so the popup doesn't jump while typing; the label column is cut to fit
+        let labelCells = min(max(shown.map { min($0.label.count, maxLabelCells) }.max() ?? 0, 12), configWidth)
+        let w = ceil(min(adv * CGFloat(configWidth) + 2 * pad, maxWidth))
         rowH = round(cell.height)
         labelW = adv * CGFloat(labelCells)
         rows = shown.map { ($0.label, $0.desc, $0.kind == "history" ? theme.muted : theme.kinds[$0.kind] ?? theme.text) }

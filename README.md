@@ -22,6 +22,18 @@ To uninstall (removes the binary, that line, the GNOME extension, config, runtim
 curl -fsSL https://raw.githubusercontent.com/roworu/compui/main/install.sh | sh -s -- --uninstall
 ```
 
+## Config
+
+Optional, `~/.config/compui/config`, picked up on change:
+```ini
+enabled = on            # popup at all
+width = 40              # popup width in cells; longer labels are cut, the full description shows below
+terminal.konsole = off  # turn compUI off in one terminal: ghostty, konsole, alacritty; macOS: terminal, iterm2, generic
+dark.bg = #2f343e       # colors per scheme (dark. / light.): bg, border, selected, text, muted, scrollbar,
+light.folder = #0184bc  # and per kind: subcommand, suggestion, option, command, folder
+debug = off             # log to $XDG_RUNTIME_DIR/compui/host.log
+```
+
 ## OS support
 Linux: KDE Plasma or GNOME on Wayland, needs gtk4 and gtk4-layer-shell. On GNOME (46+) compUI installs and enables a small shell extension on first run, since GNOME lets no app place a popup or see window positions; log out and back in once so GNOME loads it.
 macOS: allow your terminal in Accessibility settings.

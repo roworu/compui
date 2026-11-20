@@ -35,6 +35,7 @@ let alacrittyConfig: (x: CGFloat, y: CGFloat, dynamic: Bool, decorations: String
 /// alacritty: no ax text area, so the window frame below the title bar plus the padding, which
 /// alacritty scales and floors to device px; dynamic padding adds half the leftover that is not a whole cell
 struct Alacritty: Handler {
+    let name = "alacritty"
     func matches(_ bundleId: String) -> Bool { bundleId == "org.alacritty" }
     func locate(_ win: AXUIElement, _ g: GridPos) -> CGRect? {
         guard g.xpx > 0 && g.ypx > 0, let pos = attr(win, kAXPositionAttribute), let size = attr(win, kAXSizeAttribute) else { return nil }

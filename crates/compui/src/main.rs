@@ -48,19 +48,34 @@ pub struct Config {
     pub enabled: bool,
     /// log every line, window and placement
     pub debug: bool,
+    /// popup width in cells
+    pub width: usize,
+    /// `dark.<name>` / `light.<name>` color overrides, as 0xrrggbb
+    pub colors: Vec<(String, u32)>,
+    /// terminals turned off with `terminal.<name> = off`
+    pub off: Vec<String>,
 }
 
 impl Config {
     /// parses the config text, defaults for what is missing or unreadable
     pub fn parse(text: &str) -> Self {
-        let mut c = Config { enabled: true, debug: false };
+        let mut c = Config { enabled: true, debug: false, width: 40, colors: Vec::new(), off: Vec::new() };
         for line in text.lines() {
             let Some((k, v)) = line.split_once('=') else { continue };
-            let v = v.split('#').next().unwrap_or_default().trim();
+            // a comment starts at a ` #`, so `#rrggbb` values stay
+            let v = v.trim();
+            let v = v.split(" #").next().unwrap_or_default().trim();
             let on = matches!(v, "true" | "yes" | "on" | "1");
             match k.trim() {
                 "enabled" => c.enabled = on,
                 "debug" => c.debug = on,
+                "width" => c.width = v.parse().map_or(c.width, |n: usize| n.max(12)),
+                k if k.starts_with("terminal.") && !on => c.off.push(k["terminal.".len()..].into()),
+                k if k.starts_with("dark.") || k.starts_with("light.") => {
+                    if let Ok(rgb) = u32::from_str_radix(v.trim_start_matches('#'), 16) {
+                        c.colors.push((k.into(), rgb));
+                    }
+                }
                 _ => {}
             }
         }
@@ -158,7 +173,7 @@ pub const ROWS: usize = 8;
 /// what the platform side draws
 pub trait Popup {
     /// shows `cands[top..top + ROWS]` with `selected` highlighted under `cell`, on `app`'s output
-    fn show(&mut self, app: &App, cell: Rect, cands: &[Cand], selected: usize, top: usize);
+    fn show(&mut self, app: &App, cfg: &Config, cell: Rect, cands: &[Cand], selected: usize, top: usize);
     fn hide(&mut self);
 }
 
@@ -321,7 +336,7 @@ impl<P: Popup> Host<P> {
             log(&format!("no cursor rect for {:?}", self.app));
             return self.hide();
         };
-        self.popup.show(&self.app, cell, &self.cands, self.selected, self.top);
+        self.popup.show(&self.app, &self.config, cell, &self.cands, self.selected, self.top);
         if self.shown.is_none() {
             self.shown = Some(c.client);
             if let Some(s) = self.clients.get_mut(&c.client) {
@@ -373,10 +388,11 @@ impl<P: Popup> Host<P> {
             Msg::Line { session, seq, buffer, cursor, cwd, path, history, recent, cell, grid, .. } => {
                 let active = self.app.pid != 0 && is_ancestor(self.app.pid, session);
                 self.reload();
-                log(&format!("line {buffer:?} cell {cell:?} grid {grid:?} active {active} enabled {}", self.config.enabled));
+                let enabled = self.config.enabled && !self.config.off.contains(&self.app.exe);
+                log(&format!("line {buffer:?} cell {cell:?} grid {grid:?} active {active} enabled {enabled}"));
                 self.latest += 1;
                 self.request = None;
-                if history || !active || !self.config.enabled || buffer.trim().is_empty() {
+                if history || !active || !enabled || buffer.trim().is_empty() {
                     return self.hide_if(client);
                 }
                 let ctx = Ctx { client, session, seq, row: cell.row, col: cell.col, rows: grid.rows, cols: grid.cols, xpx: grid.xpx, ypx: grid.ypx, cursor, recent };
@@ -533,8 +549,12 @@ mod tests {
 
     #[test]
     fn config_parses() {
-        assert_eq!(Config::parse(""), Config { enabled: true, debug: false });
-        assert_eq!(Config::parse("# x\nenabled = false # off\ndebug=true\n"), Config { enabled: false, debug: true });
+        let d = Config::parse("");
+        assert_eq!(d, Config { enabled: true, debug: false, width: 40, colors: vec![], off: vec![] });
+        assert_eq!(Config::parse("# x\nenabled = false # off\ndebug=true\n"), Config { enabled: false, debug: true, ..d });
+        let c = Config::parse("width = 50\nterminal.konsole = off\nterminal.ghostty = on\ndark.bg = #102030 # x\nlight.folder=0184bc\ndark.text = nope\n");
+        assert_eq!((c.width, c.off), (50, vec!["konsole".to_string()]));
+        assert_eq!(c.colors, vec![("dark.bg".to_string(), 0x102030), ("light.folder".to_string(), 0x0184bc)]);
     }
 
     // reads /proc

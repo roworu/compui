@@ -2,7 +2,7 @@
 //! embedded here and written to the user's extensions dir) reports the focused window and shows the
 //! popup. the host renders the popup into an image with the layer-shell popup's drawing code
 use super::popup::{self, SHADOW};
-use crate::{App, Cand, Popup, Rect, log, runtime_dir};
+use crate::{App, Cand, Config, Popup, Rect, log, runtime_dir};
 use gtk4::{cairo, gdk, prelude::*};
 use std::{env, fs, path::PathBuf};
 use zbus::blocking::Connection;
@@ -60,12 +60,12 @@ fn monitor(cell: Rect) -> Option<Rect> {
 }
 
 impl Popup for Shell {
-    fn show(&mut self, app: &App, cell: Rect, cands: &[Cand], selected: usize, top: usize) {
+    fn show(&mut self, app: &App, cfg: &Config, cell: Rect, cands: &[Cand], selected: usize, top: usize) {
         let Some(bus) = &self.bus else { return };
         let Some(mon) = monitor(cell) else { return };
         let dark = *self.dark.get_or_insert_with(|| popup::dark(Some(bus)));
         let ctx = pangocairo::FontMap::default().create_context();
-        let (view, x, y) = popup::arrange(&ctx, mon, dark, cell, cands, selected, top);
+        let (view, x, y) = popup::arrange(&ctx, mon, dark, cfg, cell, cands, selected, top);
         // drawn at the monitor's scale so it stays sharp; the shell sizes it in logical px
         let s = app.scale.max(1.0);
         let (iw, ih) = (view.w + SHADOW.0 + SHADOW.2, view.h + SHADOW.1 + SHADOW.3);

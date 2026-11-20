@@ -18,8 +18,12 @@ let statusItem = NSMenuItem(title: "running", action: nil, keyEquivalent: "")
 func refreshStatus() { statusItem.title = !AXIsProcessTrusted() ? "accessibility permission missing" : enabled ? "running" : "popup off" }
 let toggleItem = NSMenuItem(title: "Popup enabled", action: #selector(Toggle.flip(_:)), keyEquivalent: "")
 
-// ~/.config/compui/config (`enabled`, `debug`), reread when it changes; the tray toggle holds until the next change
+// ~/.config/compui/config (`enabled`, `debug`, `width`, `terminal.<name>`, `dark.<name>` / `light.<name>`
+// colors), reread when it changes; the tray toggle holds until the next change
 var configDebug = false
+var configWidth = 40
+var configColors: [String: UInt32] = [:]
+var configOff: Set<String> = []
 var configMtime: Date?, configRead = false
 func reloadConfig() {
     let base = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"] ?? NSString(string: "~/.config").expandingTildeInPath
@@ -28,12 +32,24 @@ func reloadConfig() {
     if configRead && mtime == configMtime { return }
     configRead = true; configMtime = mtime
     var on = true
-    configDebug = false
+    configDebug = false; configWidth = 40; configColors = [:]; configOff = []
     for line in ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n") {
         let kv = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
         guard kv.count == 2 else { continue }
-        let v = ["true", "yes", "on", "1"].contains(kv[1].split(separator: "#", omittingEmptySubsequences: false)[0].trimmingCharacters(in: .whitespaces))
-        switch kv[0].trimmingCharacters(in: .whitespaces) { case "enabled": on = v; case "debug": configDebug = v; default: break }
+        // a comment starts at a ` #`, so `#rrggbb` values stay
+        let s = kv[1].trimmingCharacters(in: .whitespaces)
+        let val = (s.range(of: " #").map { String(s[..<$0.lowerBound]) } ?? s).trimmingCharacters(in: .whitespaces)
+        let v = ["true", "yes", "on", "1"].contains(val)
+        let k = kv[0].trimmingCharacters(in: .whitespaces)
+        switch k {
+        case "enabled": on = v
+        case "debug": configDebug = v
+        case "width": if let n = Int(val) { configWidth = max(n, 12) }
+        case _ where k.hasPrefix("terminal."): if !v { configOff.insert(String(k.dropFirst("terminal.".count))) }
+        case _ where k.hasPrefix("dark.") || k.hasPrefix("light."):
+            if let rgb = UInt32(val.hasPrefix("#") ? String(val.dropFirst()) : val, radix: 16) { configColors[k] = rgb }
+        default: break
+        }
     }
     enabled = on; toggleItem.state = on ? .on : .off; refreshStatus()
     if !on { hide() }
@@ -122,8 +138,8 @@ func onCandidates(_ record: String) {
     let col = max((c.cell["col"] ?? 0) - (c.cursor - s), 0)
     guard let app = NSWorkspace.shared.frontmostApplication,
           let win = attr(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedWindowAttribute),
-          let handler = handlers.first(where: { $0.matches(app.bundleIdentifier ?? "") }),
-          let rect = handler.locate(win as! AXUIElement, GridPos(row: c.cell["row"] ?? 0, col: col, rows: c.grid["rows"] ?? 1, cols: c.grid["cols"] ?? 1, xpx: c.grid["xpx"] ?? 0, ypx: c.grid["ypx"] ?? 0)) else { log("no cursor rect: frontmost app, focused window or locate failed"); hide(); return }
+          let handler = handlers.first(where: { $0.matches(app.bundleIdentifier ?? "") }), !configOff.contains(handler.name),
+          let rect = handler.locate(win as! AXUIElement, GridPos(row: c.cell["row"] ?? 0, col: col, rows: c.grid["rows"] ?? 1, cols: c.grid["cols"] ?? 1, xpx: c.grid["xpx"] ?? 0, ypx: c.grid["ypx"] ?? 0)) else { log("no cursor rect: frontmost app, focused window, terminal turned off or locate failed"); hide(); return }
     ctx = c; wordStart = s; wordEnd = e; selected = found.isEmpty ? 0 : c.recent.count; top = 0
     watch(app.processIdentifier, win as! AXUIElement)
     show(rect)
