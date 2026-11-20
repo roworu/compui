@@ -24,12 +24,12 @@ jobs:
           apt-get update && apt-get install -y build-essential curl git pkg-config libgtk-4-dev libgtk4-layer-shell-dev
           curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup update stable && rustup default stable
       - run: cargo test
       - run: ./build.sh
       - run: tar -C dist -czf compui-${{ matrix.name }}.tar.gz .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: compui-${{ matrix.name }}
           path: compui-${{ matrix.name }}.tar.gz
@@ -37,7 +37,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
       - run: gh release create "$GITHUB_REF_NAME" compui-*.tar.gz --repo "$GITHUB_REPOSITORY" --generate-notes
