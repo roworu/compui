@@ -401,7 +401,10 @@ impl<P: Popup> Host<P> {
                         if let Some(s) = self.clients.get_mut(&client) {
                             reply(s, &m);
                         }
-                        self.suppressed = Some((client, self.word.0));
+                        // a directory keeps the word start, its entries should still pop up
+                        if !cand.insert.ends_with('/') {
+                            self.suppressed = Some((client, self.word.0));
+                        }
                         // the wrapper stops taking keys on accept by itself
                         self.shown = None;
                         return self.popup.hide();

@@ -177,7 +177,9 @@ func handle(_ line: Data, _ fd: Int32) {
             // a history line replaces the line up to the word's end, not just the word
             let start = cands[selected].kind == "history" ? 0 : wordStart
             reply(fd, ["type": "accept", "session": c.session, "seq": c.seq, "start": start, "end": wordEnd, "text": cands[selected].insert])
-            suppressed = (fd, wordStart); shownFd = nil; panel.orderOut(nil)
+            // a directory keeps the word start, its entries should still pop up
+            if !cands[selected].insert.hasSuffix("/") { suppressed = (fd, wordStart) }
+            shownFd = nil; panel.orderOut(nil)
         case "dismiss": suppressed = (fd, wordStart); hide()
         default: break
         }

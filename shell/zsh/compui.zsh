@@ -78,7 +78,8 @@ if [[ -o interactive ]]; then
       # a redraw from here runs no line-pre-redraw hook, so they are run here: they report
       # the new line, and plugins like zsh-syntax-highlighting color it there. the hook
       # dispatcher finds its hooks by $WIDGET, which still names this handler
-      if (( $+functions[azhw:zle-line-pre-redraw] )); then
+      # azhw:* exists once add-zle-hook-widget loads, but only runs hooks when it is the widget
+      if [[ $widgets[zle-line-pre-redraw] == user:azhw:zle-line-pre-redraw ]]; then
         () {
           local -h -r WIDGET=zle-line-pre-redraw
           azhw:zle-line-pre-redraw
