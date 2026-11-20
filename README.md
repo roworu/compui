@@ -18,7 +18,7 @@ It adds this line to the top of your .zshrc (skipped if already there):
 ```
 
 ## OS support
-Linux: KDE Plasma on Wayland, needs gtk4 and gtk4-layer-shell.
+Linux: KDE Plasma or GNOME on Wayland, needs gtk4 and gtk4-layer-shell. On GNOME (46+) compUI installs and enables a small shell extension on first run, since GNOME lets no app place a popup or see window positions; log out and back in once so GNOME loads it.
 macOS: allow your terminal in Accessibility settings.
 
 ## Supported terminals

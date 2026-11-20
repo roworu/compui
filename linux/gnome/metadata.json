@@ -1,0 +1,7 @@
+{
+  "uuid": "compui@roworu.github.io",
+  "name": "compUI",
+  "description": "Reports the focused window to compUI's host and shows its completion popup. Written and enabled by `compui host`.",
+  "shell-version": ["46", "47", "48", "49", "50", "51"],
+  "url": "https://github.com/roworu/compui"
+}

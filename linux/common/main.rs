@@ -1,10 +1,12 @@
-//! linux side of the host (`compui host`, started by the first wrapper): a layer-shell
-//! popup (gtk4, `popup.rs`) and a kwin script that reports the active window over d-bus. kde plasma
-//! (wayland) only for now
+//! linux side of the host (`compui host`, started by the first wrapper): on kde plasma (wayland) a
+//! layer-shell popup (gtk4, `popup.rs`) and a kwin script that reports the active window over d-bus;
+//! on gnome a shell extension does both (`../gnome`)
+#[path = "../gnome/main.rs"]
+mod gnome;
 #[path = "popup.rs"]
 mod popup;
 
-use crate::{App, Ev, Grid, Handler, Host, Rect, serve};
+use crate::{App, Ev, Grid, Handler, Host, Popup, Rect, serve};
 use gtk4::{self as gtk, glib};
 use popup::Gtk;
 use std::{env, fs};
@@ -34,6 +36,11 @@ impl Bridge {
         };
         let _ = self.0.send_blocking(Ev::Window(app));
     }
+
+    /// mouse wheel over the gnome popup, in rows
+    fn scroll(&self, n: i32) {
+        let _ = self.0.send_blocking(Ev::Scroll(n));
+    }
 }
 
 /// cell and text area size in logical px from the pty's pixel size, which is the text area with the
@@ -59,19 +66,39 @@ fn kwin_call<B: serde::Serialize + zbus::zvariant::DynamicType>(c: &Connection, 
     c.call_method(Some("org.kde.KWin"), path, Some(iface), method, body)
 }
 
-/// owns the bridge's d-bus name and (re)loads the kwin script
-fn kwin(tx: async_channel::Sender<Ev>) -> zbus::Result<Connection> {
-    let conn = zbus::blocking::connection::Builder::session()?.name(SVC)?.serve_at("/", Bridge(tx))?.build()?;
+/// owns the bridge's d-bus name
+fn bridge(tx: async_channel::Sender<Ev>) -> zbus::Result<Connection> {
+    zbus::blocking::connection::Builder::session()?.name(SVC)?.serve_at("/", Bridge(tx))?.build()
+}
+
+/// (re)loads the kwin script
+fn kwin(conn: &Connection) -> zbus::Result<()> {
     let script = env::temp_dir().join(format!("compui-{}-kwin.js", unsafe { libc::getuid() }));
     fs::write(&script, include_str!("kwin.js")).map_err(|e| zbus::Error::Failure(e.to_string()))?;
     // a host that was killed leaves its script loaded
-    let _ = kwin_call(&conn, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", &("compui"));
-    let id: i32 = kwin_call(&conn, "/Scripting", "org.kde.kwin.Scripting", "loadScript", &(script.to_string_lossy().as_ref(), "compui"))?.body().deserialize()?;
+    let _ = kwin_call(conn, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", &("compui"));
+    let id: i32 = kwin_call(conn, "/Scripting", "org.kde.kwin.Scripting", "loadScript", &(script.to_string_lossy().as_ref(), "compui"))?.body().deserialize()?;
     if id < 0 {
         return Err(zbus::Error::Failure("kwin refused the script".into()));
     }
-    kwin_call(&conn, &format!("/Scripting/Script{id}"), "org.kde.kwin.Script", "run", &())?;
-    Ok(conn)
+    kwin_call(conn, &format!("/Scripting/Script{id}"), "org.kde.kwin.Script", "run", &())?;
+    Ok(())
+}
+
+/// handles events until one says quit
+fn event_loop<P: Popup + 'static>(mut host: Host<P>, rx: async_channel::Receiver<Ev>) {
+    host.reload();
+    let main = glib::MainLoop::new(None, false);
+    let m = main.clone();
+    glib::spawn_future_local(async move {
+        while let Ok(ev) = rx.recv().await {
+            if !host.on(ev) {
+                break;
+            }
+        }
+        m.quit();
+    });
+    main.run();
 }
 
 /// runs the host until sigterm or sigint
@@ -87,12 +114,19 @@ pub fn run(handlers: Vec<Box<dyn Handler>>) {
     gtk::init().expect("gtk needs a wayland display");
     let (tx, rx) = async_channel::unbounded();
     // without these the popup can't show; said always, so the host log tells why
-    if !gtk4_layer_shell::is_supported() {
-        eprintln!("compositor without layer-shell, no popup");
+    let bus = bridge(tx.clone()).inspect_err(|e| eprintln!("d-bus name not owned, no popup: {e}")).ok();
+    let gnome = gnome::is_gnome();
+    let mut kwin_loaded = false;
+    if gnome {
+        if let Some(c) = &bus {
+            gnome::install(c);
+        }
+    } else {
+        if !gtk4_layer_shell::is_supported() {
+            eprintln!("compositor without layer-shell, no popup");
+        }
+        kwin_loaded = bus.as_ref().is_some_and(|c| kwin(c).inspect_err(|e| eprintln!("kwin script not loaded, no popup: {e}")).is_ok());
     }
-    let bridge = kwin(tx.clone()).inspect_err(|e| eprintln!("kwin script not loaded, no popup: {e}"));
-    let mut host = Host::new(Gtk::new(tx.clone()), handlers, tx.clone());
-    host.reload();
     serve(tx.clone());
     {
         let tx = tx.clone();
@@ -102,18 +136,12 @@ pub fn run(handlers: Vec<Box<dyn Handler>>) {
             let _ = tx.send_blocking(Ev::Quit);
         });
     }
-    let main = glib::MainLoop::new(None, false);
-    let m = main.clone();
-    glib::spawn_future_local(async move {
-        while let Ok(ev) = rx.recv().await {
-            if !host.on(ev) {
-                break;
-            }
-        }
-        m.quit();
-    });
-    main.run();
-    if let Ok(c) = &bridge {
+    if gnome {
+        event_loop(Host::new(gnome::Shell::new(bus.clone()), handlers, tx.clone()), rx);
+    } else {
+        event_loop(Host::new(Gtk::new(tx.clone()), handlers, tx.clone()), rx);
+    }
+    if let (true, Some(c)) = (kwin_loaded, &bus) {
         let _ = kwin_call(c, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", &("compui"));
     }
 }

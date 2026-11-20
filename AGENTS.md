@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-compUI: a fig-style completion popup for terminals it doesn't own, on macOS and Linux (KDE Wayland). Candidates come from [compcore](https://github.com/roworu/compcore) (pinned tag v0.1.3); compUI finds the cursor on screen, shows a native popup and puts the picked candidate into the shell line.
+compUI: a fig-style completion popup for terminals it doesn't own, on macOS and Linux (KDE or GNOME, Wayland). Candidates come from [compcore](https://github.com/roworu/compcore) (pinned tag v0.1.3); compUI finds the cursor on screen, shows a native popup and puts the picked candidate into the shell line.
 
 ## Commands
 
-- `install.sh` — downloads the latest release (`curl -fsSL https://raw.githubusercontent.com/roworu/compui/main/install.sh | sh`) into `~/.local/bin`: one `compui` binary (wrapper, host and compcore linked from the pinned tag, zsh files embedded). Point the terminal's command at it; the first `compui` starts `compui host` in the background (own session, single instance via a lock), which exits 30s after the last wrapper closes. Config `~/.config/compui/config` (`enabled`, `debug`; optional, reread on change). Runtime files (zsh adapter, `host.log`, `host.lock`) in `$XDG_RUNTIME_DIR/compui` (else `~/.cache/compui`).
+- `install.sh` — downloads the latest release (`curl -fsSL https://raw.githubusercontent.com/roworu/compui/main/install.sh | sh`) into `~/.local/bin`: one `compui` binary (wrapper, host and compcore linked from the pinned tag, zsh files embedded). Point the terminal's command at it; the first `compui` starts `compui host` in the background (own session, single instance via a lock), which exits 30s after the last wrapper closes. Config `~/.config/compui/config` (`enabled`, `debug`; optional, reread on change). Runtime files (zsh adapter, `host.log`, `host.lock`, `popup.argb` on GNOME) in `$XDG_RUNTIME_DIR/compui` (else `~/.cache/compui`).
 - `./build.sh` — builds `dist/compui`. On macOS `crates/compui/build.rs` compiles the Swift host into a static library linked into it, so `compui host` is the host there too (it gets candidates from `compui serve`). Needs cargo, and swiftc on macOS.
 - Releases: pushing a `v*` tag runs `.github/workflows/release.yml` (tests, `./build.sh` on linux x86_64/arm64 and macOS arm64, `compui-<os>-<arch>.tar.gz` of `dist/` attached to a GitHub release).
 - `./test.sh` — builds, kills a running host, then starts the wrapper in a pure zsh (temp empty `ZDOTDIR`) with `COMPUI_DEBUG=1`, so the host it starts logs everything. Interactive and manual: type `git ch`. Host log: `$XDG_RUNTIME_DIR/compui/host.log`.
@@ -42,7 +42,7 @@ terminal ⇄ compui (wrapper) ⇄ zsh (shell/zsh/compui.zsh)
 
 ## Hosts
 
-On macOS the host is Swift (linked into `compui`); on Linux (KDE Wayland) it is Rust (`crates/compui/src/main.rs`, which pulls in `linux/common/main.rs`, `linux/ghostty/main.rs`, `linux/konsole/main.rs` and `linux/alacritty/main.rs` via `#[path]`, popup via gtk4-layer-shell drawn with cairo/pango in `linux/common/popup.rs` (the Swift twin is `macos/common/popup.swift`, keep their look in sync), window position from a KWin script over D-Bus, compcore linked). The pty uses `vt100`. On Linux there is no tray; the host is started on demand by the wrapper and configured by one file. Cargo workspace edition is 2024.
+On macOS the host is Swift (linked into `compui`); on Linux (KDE Wayland) it is Rust (`crates/compui/src/main.rs`, which pulls in `linux/common/main.rs`, `linux/ghostty/main.rs`, `linux/konsole/main.rs` and `linux/alacritty/main.rs` via `#[path]`, popup via gtk4-layer-shell drawn with cairo/pango in `linux/common/popup.rs` (the Swift twin is `macos/common/popup.swift`, keep their look in sync), window position from a KWin script over D-Bus, compcore linked). On GNOME (`XDG_CURRENT_DESKTOP`) there is no KWin and no layer-shell: the host writes the shell extension `linux/gnome/extension.js` (embedded, to `~/.local/share/gnome-shell/extensions/compui@roworu.github.io`) and enables it; it reports the focused window to the same D-Bus `Window` method, and `linux/gnome/main.rs` renders the popup with `popup.rs`'s `arrange`/`draw` into an image in the runtime dir that the extension shows (`Show`/`Hide` on `org.gnome.Shell` `/io/github/roworu/compui`; wheel back via `Scroll`). Untested on a real GNOME: only checked against a D-Bus stub standing in for the shell. The pty uses `vt100`. On Linux there is no tray; the host is started on demand by the wrapper and configured by one file. Cargo workspace edition is 2024.
 
 ## Editor terminals (Zed, VS Code): not supported yet
 
@@ -55,7 +55,7 @@ Checked on KDE Wayland. The wrapper and completions work inside both, but the ho
 
 - host: keep Swift on macOS or move it to Rust like Linux; pty on `alacritty_terminal` instead of `vt100`
 - macOS: `macos/iterm2` and `macos/alacritty` untested; multiple screens, spaces, full screen; `.app`, universal, sign, notarize, launch agent; guided accessibility permission setup (now only the prompt on start and the tray status line)
-- Linux: gnome (no kwin, no layer-shell), gnome-terminal, konsole sessions with a non-default profile; ghostty's `window-padding-balance`, splits stacked vertically and a bottom tab bar
+- Linux: gnome untested on a real session (extension api differences across 46–51, stage in device px without `scale-monitor-framebuffer`, alacritty's client-side title bar there); gnome-terminal and other VTE terminals, konsole sessions with a non-default profile; ghostty's `window-padding-balance`, splits stacked vertically and a bottom tab bar
 - keys: wait up to 400 ms for candidates still being found; word start for wide chars and wrapped lines
 - popup: pick by click is off; colors are kuterm's bundled themes, not the terminal's palette or font
 - tests: pty byte-for-byte against no wrapper, ax fixtures
