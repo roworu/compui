@@ -17,6 +17,11 @@ It adds this line to the top of your .zshrc (skipped if already there):
 [[ -z $COMPUI_SOCKET ]] && exec ~/.local/bin/compui
 ```
 
+To uninstall (removes the binary, that line, the GNOME extension, config, runtime and cache files):
+```sh
+curl -fsSL https://raw.githubusercontent.com/roworu/compui/main/install.sh | sh -s -- --uninstall
+```
+
 ## OS support
 Linux: KDE Plasma or GNOME on Wayland, needs gtk4 and gtk4-layer-shell. On GNOME (46+) compUI installs and enables a small shell extension on first run, since GNOME lets no app place a popup or see window positions; log out and back in once so GNOME loads it.
 macOS: allow your terminal in Accessibility settings.
