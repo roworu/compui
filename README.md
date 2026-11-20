@@ -1,6 +1,10 @@
 # compUI
 
-Fig-style completion popup for terminals you already use (ghostty, konsole, Terminal.app, iTerm2). Type a command, pick a candidate with up/down (or scroll with the mouse wheel), tab to insert. Recent history lines that start with what you typed are listed first. zsh only.
+IDE style completion popup for terminals you already use (ghostty, konsole, Terminal.app, iTerm2...). Type a command, pick a candidate with up/down, tab to insert. Recent history lines that start with what you typed are listed first.
+
+zsh only.
+
+![compUI in ghostty and konsole](assets/demo.gif)
 
 ## Install
 
@@ -12,5 +16,6 @@ Then set your terminal's command to `~/.local/bin/compui` (ghostty: `command = ~
 
 Konsole: set it as the profile's Command (Settings → Edit Current Profile), not started from your shell, or Konsole warns on every close that compui is still running.
 
-Linux: KDE Plasma on Wayland, needs gtk4 and gtk4-layer-shell. 
-macOS: allow your terminal in Accessibility settings. 
+## OS support
+Linux: KDE Plasma on Wayland, needs gtk4 and gtk4-layer-shell.
+macOS: allow your terminal in Accessibility settings.
