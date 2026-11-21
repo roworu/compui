@@ -47,13 +47,14 @@ impl Default for Ghostty {
 
 /// the cell rect from the client's left plus the padding and its bottom minus the padding
 pub fn locate(pad: Padding, app: &App, g: &Grid) -> Option<Rect> {
-    // ghostty's pixel sizes are device pixels
-    let (cw, _, gw, _) = cells(g, app.scale)?;
+    // ghostty's pixel sizes are device pixels at gtk's integer scale, so 2 on a 1.25 output
+    let scale = app.scale.ceil();
+    let (cw, _, gw, _) = cells(g, scale)?;
     // split check: the grid must fill the window's width, else this is one pane of several
     if (app.rect.w - pad.left - pad.right - gw).abs() > cw {
         return None;
     }
-    cell_rect(app, g, app.scale, pad.left, pad.bottom)
+    cell_rect(app, g, scale, pad.left, pad.bottom)
 }
 
 impl Handler for Ghostty {
@@ -91,5 +92,15 @@ mod tests {
         // half the width: a split
         let half = App { rect: Rect { w: app.rect.w * 2.0, ..app.rect }, ..app.clone() };
         assert!(locate(pad, &half, &g).is_none());
+    }
+
+    #[test]
+    fn fractional_scale() {
+        // seen on a 1.25 output: 72x24 cells of 22x49 px at scale 2 (11x24.5 points) in an 800x600 window
+        let pad = Padding { left: 2.0, right: 2.0, bottom: 2.0 };
+        let app = App { rect: Rect { x: 368.0, y: 174.0, w: 800.0, h: 600.0 }, scale: 1.25, ..App::default() };
+        let g = Grid { row: 0, col: 22, rows: 24, cols: 72, xpx: 1590, ypx: 1190 };
+        let r = locate(pad, &app, &g).unwrap();
+        assert_eq!(r, Rect { x: 368.0 + 2.0 + 22.0 * 11.0, y: 174.0 + 600.0 - 2.0 - 595.0, w: 11.0, h: 24.5 });
     }
 }
