@@ -1,8 +1,14 @@
 //! on macos: compiles the swift host (`macos/`) into a static library linked into `compui`, so
-//! `compui host` runs it from the one binary
+//! `compui host` runs it from the one binary. on every os: passes compcore's locked version on for
+//! `--version`
 use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
+    let lock = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../Cargo.lock");
+    println!("cargo:rerun-if-changed={}", lock.display());
+    let lock = fs::read_to_string(&lock).unwrap_or_default();
+    let v = lock.split_once("name = \"compcore\"\nversion = \"").and_then(|(_, r)| r.split_once('"')).map_or("unknown", |(v, _)| v);
+    println!("cargo:rustc-env=COMPCORE_VERSION={v}");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }

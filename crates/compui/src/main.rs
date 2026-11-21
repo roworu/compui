@@ -527,10 +527,18 @@ fn host() {
     eprintln!("no host for this os");
 }
 
+const USAGE: &str = "usage: compui [host|serve]
+       compui --help|--version
+  (none)  run the shell under the wrapper, starting the host if it isn't running
+  host    the popup host, started by the wrapper
+  serve   answer compcore requests on stdin, used by the macos host";
+
 fn main() {
     match env::args().nth(1).as_deref() {
         Some("host") => host(),
         Some("serve") => serve_stdio(),
+        Some("-h" | "--help") => println!("{USAGE}"),
+        Some("-V" | "--version") => println!("compui {} (compcore {})", env!("CARGO_PKG_VERSION"), env!("COMPCORE_VERSION")),
         _ => pty::run(),
     }
 }
