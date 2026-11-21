@@ -38,6 +38,15 @@ chmod +x "$bin/compui.new"
 # moved over, not written in place: running wrappers keep their old file and macos keeps the signature valid
 mv -f "$bin/compui.new" "$bin/compui"
 echo "compUI installed: $bin/compui"
+# a host from the old binary stays up while any terminal runs compUI; open terminals reconnect to a new one,
+# but on linux they can't start it themselves since their exe is now deleted
+if pkill -f "$bin/compui host" 2>/dev/null; then
+  while pgrep -f "$bin/compui host" >/dev/null; do sleep 0.1; done
+  log="${XDG_RUNTIME_DIR:-$HOME/.cache}/compui"
+  mkdir -p "$log"
+  if command -v setsid >/dev/null; then (cd / && setsid "$bin/compui" host </dev/null >/dev/null 2>"$log/host.log" &); fi
+  echo "restarted the running compUI host"
+fi
 
 line="[[ -z \$COMPUI_SOCKET ]] && exec $bin/compui"
 if grep -qs 'COMPUI_SOCKET' "$rc"; then
